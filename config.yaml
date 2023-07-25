@@ -1,0 +1,20 @@
+# Data Directories
+data_settings:
+  emiss_dir: /media/dupreeda_local/Seagate_Exp/Geodata/Greta_2018/UniAugsburg_2018_Sub2020_Inlandsprinzip_Greta1.1.4.gdb
+  corine_dir: /media/dupreeda_local/Seagate_Exp/Geodata/corine_2018/u2018_clc2018_v2020_20u1_fgdb/DATA/U2018_CLC2018_V2020_20u1.gdb
+  popul_dir: /media/dupreeda_local/Seagate_Exp/Geodata/GHS/GHS_POP_E2020_GLOBE_R2023A_54009_100_V1_0_R4_C19/GHS_POP_E2020_GLOBE_R2023A_54009_100_V1_0_R4_C19.tif
+  edgar_dir: /media/dupreeda_local/Seagate_Exp/EDGAR
+
+# Simulation parameters
+job_settings:
+  job_path: /home/dupreeda_local/MBEES/downscale_emissions_local
+  job_name: test
+  min_lon: 1202945
+  max_lon: 1222945
+  min_lat: 6159267
+  max_lat: 6179267
+  resol: 10
+  epsg_code: 3857
+  species: [co]
+  country: Germany
+  inventory: GRETA                                                    
