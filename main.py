@@ -35,10 +35,3 @@ downscaling_proxies(data_parameters, job_parameters, bbox_grid, bbox_epsg)
 
 ## Downscaling Emissions and output
 downscale_emissions(job_parameters, sectors, gdf_grid, bbox_grid, bbox_epsg)
-
-#TODO
-# Downscale emisisons
-# Final output
-# Add Some input parameter checks
-# README
-# Aerosols

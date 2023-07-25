@@ -9,12 +9,12 @@ data_settings:
 job_settings:
   job_path: /home/dupreeda_local/MBEES/downscale_emissions_local
   job_name: test
-  min_lon: 1202945
-  max_lon: 1222945
-  min_lat: 6159267
-  max_lat: 6179267
+  min_lon: 634412
+  max_lon: 654412
+  min_lat: 5353605
+  max_lat: 5373605
   resol: 10
-  epsg_code: 3857
+  epsg_code: 25832
   species: [co]
   country: Germany
   inventory: GRETA                                                    
