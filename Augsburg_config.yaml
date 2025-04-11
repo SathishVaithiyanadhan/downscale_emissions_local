@@ -1,11 +1,9 @@
 # Data Directories
 data_settings:
   emiss_dir: /home/vaithisa/Input_data/UniAugsburg_2018_Sub2020_Inlandsprinzip_Greta1.1.4.gdb
-  corine_dir: /home/vaithisa/Input_data/LU_Urban_Atlas/UrbanAtlasBBox.gdb #/home/vaithisa/Input_data/u2018_clc2018_v2020_20u1_fgdb/DATA/U2018_CLC2018_V2020_20u1.gdb
+  urbanAtlas_dir: /home/vaithisa/Input_data/LU_Urban_Atlas/UrbanAtlasBBox.gdb #/home/vaithisa/Input_data/u2018_clc2018_v2020_20u1_fgdb/DATA/U2018_CLC2018_V2020_20u1.gdb
   popul_dir: /home/vaithisa/Input_data/GHS_POP_E2020_GLOBE_R2023A_54009_100_V1_0_R4_C19/GHS_POP_E2020_GLOBE_R2023A_54009_100_V1_0_R4_C19.tif
   edgar_dir: /home/vaithisa/Input_data/EDGAR
-  #roads_shp: /home/vaithisa/Input_data/Augsburg_Static input/Augsburg_data Sathish generated/Swabia Geo data shapefiles/roads.shp
-  #/media/dupreeda_local/Seagate_Exp/EDGAR
 
 # Simulation parameters
 job_settings:
