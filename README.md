@@ -80,7 +80,11 @@ The following data is required to downscale a emission inventory using this tool
 
 ## Authors and acknowledgment
 Show your appreciation to those who have contributed to the project.
-Sathish Kumar Vaithiyanadhan (sathish.vaithiyanadhan@uni-a.de)
+For details and comemnts, please contact:
+1. Sathish Kumar Vaithiyanadhan (sathish.vaithiyanadhan@uni-a.de)
+2. Christoph Knote (christoph.knote@med.uni-augsburg.de)
+
+@ Chair of Model-based Environmental Exposure Science (MBEES), Faculty of Medicine, University of Augsburg, Germany.
 
 ## License
 For open source projects, say how it is licensed.
