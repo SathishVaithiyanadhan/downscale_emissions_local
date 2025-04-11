@@ -4,7 +4,6 @@ Enhanced Proxy Tools for Emission Downscaling
 - Improved OSM road handling with traffic-based weighting
 - Better error handling and logging
 """
-#working on 1.4.2025
 import os
 import osmnx as ox
 import pandas as pd
