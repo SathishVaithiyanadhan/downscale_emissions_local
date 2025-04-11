@@ -80,7 +80,7 @@ The following data is required to downscale a emission inventory using this tool
 
 ## Authors and acknowledgment
 Show your appreciation to those who have contributed to the project.
-For details and comemnts, please contact:
+For details and comments, please contact:
 1. Sathish Kumar Vaithiyanadhan (sathish.vaithiyanadhan@uni-a.de)
 2. Christoph Knote (christoph.knote@med.uni-augsburg.de)
 
