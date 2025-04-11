@@ -4,6 +4,8 @@
 from tools import *
 from emission_tools import *
 from proxy_tools import *
+from osgeo import gdal
+gdal.UseExceptions()  # Enable GDAL exceptions
 
 ## Read Configuration file
 data_parameters, job_parameters = config_parameters()
@@ -25,13 +27,14 @@ sectors = [['A_PublicPower', '1A1a'],
         ['SumAllSectors', 'SUM']]
 
 if job_parameters['inventory'] == 'GRETA':
-    gdf_grid, bbox_grid, bbox_epsg = prep_greta_data(data_parameters, job_parameters, sectors)
+    gdf_grid, bbox_grid, bbox_epsg, hourly_trf, weekly_trf, weekend_types, daytype_mapping = prep_greta_data(data_parameters, job_parameters, sectors)
 
 elif job_parameters['inventory'] == 'TNO':
     print('Prep TNO Emissions')
     
 ## Create proxies for downscaling
 downscaling_proxies(data_parameters, job_parameters, bbox_grid, bbox_epsg)
+#downscaling_proxies(data_parameters, job_parameters, bbox, epsg)
 
 ## Downscaling Emissions and output
-downscale_emissions(job_parameters, sectors, gdf_grid, bbox_grid, bbox_epsg)
+downscale_emissions(job_parameters, sectors, gdf_grid, bbox_grid, bbox_epsg, hourly_trf, weekly_trf, weekend_types, daytype_mapping)

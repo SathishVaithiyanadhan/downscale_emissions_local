@@ -1,0 +1,27 @@
+# Data Directories
+data_settings:
+  emiss_dir: /home/vaithisa/Input_data/UniAugsburg_2018_Sub2020_Inlandsprinzip_Greta1.1.4.gdb
+  corine_dir: /home/vaithisa/Input_data/LU_Urban_Atlas/UrbanAtlasBBox.gdb #/home/vaithisa/Input_data/u2018_clc2018_v2020_20u1_fgdb/DATA/U2018_CLC2018_V2020_20u1.gdb
+  popul_dir: /home/vaithisa/Input_data/GHS_POP_E2020_GLOBE_R2023A_54009_100_V1_0_R4_C19/GHS_POP_E2020_GLOBE_R2023A_54009_100_V1_0_R4_C19.tif
+  edgar_dir: /home/vaithisa/Input_data/EDGAR
+  #roads_shp: /home/vaithisa/Input_data/Augsburg_Static input/Augsburg_data Sathish generated/Swabia Geo data shapefiles/roads.shp
+  #/media/dupreeda_local/Seagate_Exp/EDGAR
+
+# Simulation parameters
+job_settings:
+  job_path: /home/vaithisa/Downscale_Emissions/Small_area_Emissions_UrbanAtlas
+  job_name: test
+  #min_lon: 639250 #639986.562388649    #2km x 2km
+  #max_lon: 641250 #640336.562388649   
+  #min_lat: 5357750 #5358540.075479806  
+  #max_lat: 5359750 #5358890.075479806 
+  min_lon: 639800  #small_domain
+  max_lon: 640800
+  min_lat: 5358200
+  max_lat: 5359200
+  resol: 10
+  epsg_code: 25832
+  #species: [pm2_5]
+  species: [n2o, nox, nmvoc, so2, co, pm10, pm2_5, nh3, pb, cd, hg, as, ni, bc, co2, ch4]
+  country: Germany
+  inventory: GRETA                                                    
