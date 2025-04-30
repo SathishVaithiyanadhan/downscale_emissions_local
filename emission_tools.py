@@ -155,7 +155,6 @@ def prep_greta_data(data_parameters, job_parameters, sectors):
     hourly_trf, weekly_trf, weekend_types, daytype_mapping = load_edgar_profiles(data_parameters)
     
     return gdf_grid, bbox_grid, bbox_epsg, hourly_trf, weekly_trf, weekend_types, daytype_mapping
-
 def apply_temporal_profiles(annual_emiss, sector, hourly_trf, weekly_trf, weekend_types, daytype_mapping, daytype=1):
     """Apply temporal profiles with enhanced road transport handling"""
     hourly_factors = np.ones(24) / 24
@@ -185,7 +184,7 @@ def apply_temporal_profiles(annual_emiss, sector, hourly_trf, weekly_trf, weeken
     hourly_emiss = np.stack([daily_emiss * factor for factor in hourly_factors], axis=0)
 
     return hourly_emiss
-
+#new_working
 def downscale_emissions(job_parameters, sectors, gdf_grid, bbox, epsg, hourly_trf, weekly_trf, weekend_types, daytype_mapping):
     """Enhanced downscaling with proper scaling of downscaled values"""
     print('\n=== Starting Emission Downscaling ===')
@@ -252,18 +251,34 @@ def downscale_emissions(job_parameters, sectors, gdf_grid, bbox, epsg, hourly_tr
             max_input_values[spec][sec] = max_input
             print(f"\n{col_name} max input: {max_input:.6f} Gg/km²")
 
+            # Create temporary raster at coarse resolution
+            tmp_raster = f'tmp_emission_{spec}_{sec_idx}.tif'
+            out_raster = f'emission_{spec}_{sec_idx}.tif'
+
             try:
-                # Create coarse resolution grid in memory (keep original Gg/km² units)
+                # Create coarse resolution grid (keep original Gg/km² units)
                 out_grid = make_geocube(
                     vector_data=gdf_grid,
                     measurements=[col_name],
                     resolution=(-coarse_res, coarse_res),
                     output_crs=f"EPSG:{epsg}"
                 )
-                
-                # Get the array directly without saving to file
-                emis_arr = out_grid[col_name].values
-                emis_arr = np.nan_to_num(emis_arr, nan=0)
+                out_grid[col_name] = out_grid[col_name].fillna(0)
+                out_grid.rio.to_raster(tmp_raster)
+
+                # Warp to exact extent at coarse resolution
+                ds = gdal.Open(tmp_raster)
+                gdal.Warp(out_raster, ds,
+                    xRes=coarse_res, yRes=coarse_res,
+                    resampleAlg='average',
+                    format='GTiff',
+                    dstSRS=f'EPSG:{epsg}',
+                    outputBounds=bbox,
+                    outputBoundsSRS=f'EPSG:{epsg}',
+                    targetAlignedPixels=True)
+                emis_ds = gdal.Open(out_raster)
+                emis_arr = emis_ds.ReadAsArray()
+                emis_ds = None
                 
                 # Get sector-specific proxy
                 if sec == 'A_PublicPower':
@@ -337,6 +352,11 @@ def downscale_emissions(job_parameters, sectors, gdf_grid, bbox, epsg, hourly_tr
                 )
                 hourly_arr[:,:,:,sec_idx] = hourly_emiss
 
+                if os.path.exists(tmp_raster):
+                    os.remove(tmp_raster)
+                if os.path.exists(out_raster):
+                    os.remove(out_raster)
+
             except Exception as e:
                 print(f"\nError processing {sec}: {str(e)}")
                 continue
@@ -397,7 +417,7 @@ def downscale_emissions(job_parameters, sectors, gdf_grid, bbox, epsg, hourly_tr
             continue
 
     
-    print("\n=== Max Value Comparison ===")
+    #print("\n=== Max Value Comparison ===")
     for spec in job_parameters['species']:
         print(f"\nSpecies: {spec}")
         for sec in main_sectors:
@@ -407,3 +427,4 @@ def downscale_emissions(job_parameters, sectors, gdf_grid, bbox, epsg, hourly_tr
                 print(f"  Output max: {max_output_values[spec][sec]:.6f} kg/m²")
                 print(f"  Ratio: {max_output_values[spec][sec]/(max_input_values[spec][sec]*CONV_FACTOR):.2f}x")
     print("\n=== Downscaling Completed Successfully ===")
+##########
