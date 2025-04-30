@@ -1,4 +1,3 @@
-
 import os
 import numpy as np
 import geopandas as gpd
@@ -133,16 +132,25 @@ def prep_greta_data(data_parameters, job_parameters, sectors):
     except Exception as e:
         print(f"Warning: Could not save point sources: {str(e)}")
 
+    # Calculate area in km² (original geometry is in m²)
     gdf_grid['area_km2'] = gdf_grid.geometry.area / 1e6
     
+    # Conversion factors
+    g_to_kg = 1e6  # 1 Gg = 1,000,000 kg
+    km2_to_m2 = 1e6  # 1 km² = 1,000,000 m²
+    conversion_factor = g_to_kg / km2_to_m2  # This equals 1 (1 Gg/km² = 1 kg/m²)
+
     for spec in job_parameters['species']:
         for sec in [s[0] for s in sectors]:
             col_name = f"{sec}_{spec}"
-            if col_name in gdf_prtr.columns:
-                gdf_prtr[col_name] *= 1e6
             
+            # Convert point sources (PRTR) from Gg to kg
+            if col_name in gdf_prtr.columns:
+                gdf_prtr[col_name] *= g_to_kg  # Gg → kg
+            
+            # Convert grid data from Gg/km² to kg/m²
             if col_name in gdf_grid.columns:
-                gdf_grid[col_name] = gdf_grid[col_name] * 1e6
+                gdf_grid[col_name] = gdf_grid[col_name] * conversion_factor  # Gg/km² → kg/m²
 
     hourly_trf, weekly_trf, weekend_types, daytype_mapping = load_edgar_profiles(data_parameters)
     
@@ -179,7 +187,7 @@ def apply_temporal_profiles(annual_emiss, sector, hourly_trf, weekly_trf, weeken
     return hourly_emiss
 
 def downscale_emissions(job_parameters, sectors, gdf_grid, bbox, epsg, hourly_trf, weekly_trf, weekend_types, daytype_mapping):
-    """Proxy-based emission downscaling with proper resource handling"""
+    """Enhanced downscaling with proper scaling of downscaled values"""
     print('\n=== Starting Emission Downscaling ===')
     print(f"Downscaling BBOX: {bbox}")
     print(f"Resolution: {job_parameters['resol']} m")
@@ -191,13 +199,20 @@ def downscale_emissions(job_parameters, sectors, gdf_grid, bbox, epsg, hourly_tr
     rows = int(np.ceil((y_max - y_min) / resol))
     print(f"Output grid: {rows}x{cols} cells")
 
+    # Conversion factors
+    GG_TO_KG = 1e6  # 1 Gg = 1,000,000 kg
+    KM2_TO_M2 = 1e6  # 1 km² = 1,000,000 m²
+    CONV_FACTOR = GG_TO_KG / KM2_TO_M2  # Direct Gg/km² → kg/m²
+    coarse_res = 1000  # 1km coarse resolution
+    patch_size = int(coarse_res / resol)  # Size of coarse cell in fine cells
+
     def load_proxy(proxy_path):
         try:
             ds = gdal.Open(proxy_path)
             if ds is None:
                 raise ValueError(f"Could not open {proxy_path}")
             arr = ds.ReadAsArray()
-            ds = None  # Explicitly close dataset
+            ds = None
             return np.nan_to_num(arr, nan=0)
         except Exception as e:
             raise RuntimeError(f"Failed to load proxy {proxy_path}: {str(e)}")
@@ -211,20 +226,19 @@ def downscale_emissions(job_parameters, sectors, gdf_grid, bbox, epsg, hourly_tr
         clc_ds = gdal.Open('clc_proxy.tif')
         clc_trans = (x_min, resol, 0, y_max, 0, -resol)
         clc_wkt = clc_ds.GetProjection()
-        clc_ds = None  # Explicitly close dataset
+        clc_ds = None
     except Exception as e:
         raise RuntimeError(f"Proxy loading failed: {str(e)}")
 
-    km2_to_m2 = 1e6
-    g_to_kg = 1e3
     main_sectors = [item[0] for item in sectors]
+    max_input_values = {}
+    max_output_values = {}
 
     for spec in tqdm(job_parameters['species'], desc="Processing species"):
         yearly_arr = np.zeros((rows, cols, len(sectors)), dtype=np.float32)
         hourly_arr = np.zeros((24, rows, cols, len(sectors)), dtype=np.float32)
-
-        original_max = gdf_grid[f'SumAllSectors_{spec}'].max() * (g_to_kg / km2_to_m2)
-        print(f"\nOriginal SumAllSectors_{spec} max emission: {original_max:.6f} kg/m²")
+        max_input_values[spec] = {}
+        max_output_values[spec] = {}
 
         for sec_idx, sec in enumerate(tqdm(main_sectors, desc=f"Downscaling {spec}", leave=False)):
             col_name = f"{sec}_{spec}"
@@ -233,39 +247,25 @@ def downscale_emissions(job_parameters, sectors, gdf_grid, bbox, epsg, hourly_tr
                 print(f"\nSkipping {col_name}: No emissions found")
                 continue
 
-            tmp_raster = f'tmp_emission_{spec}_{sec_idx}.tif'
-            out_raster = f'emission_{spec}_{sec_idx}.tif'
+            # Store max input value
+            max_input = gdf_grid[col_name].max()
+            max_input_values[spec][sec] = max_input
+            print(f"\n{col_name} max input: {max_input:.6f} Gg/km²")
 
             try:
+                # Create coarse resolution grid in memory (keep original Gg/km² units)
                 out_grid = make_geocube(
                     vector_data=gdf_grid,
                     measurements=[col_name],
-                    resolution=(-resol, resol),
+                    resolution=(-coarse_res, coarse_res),
                     output_crs=f"EPSG:{epsg}"
                 )
-                out_grid[col_name] = out_grid[col_name].fillna(0)
-                out_grid.rio.to_raster(tmp_raster)
-
-                ds = gdal.Open(tmp_raster)
-                gdal.Warp(out_raster, ds,
-                    xRes=resol, yRes=resol,
-                    resampleAlg='average',
-                    format='GTiff',
-                    dstSRS=f'EPSG:{epsg}',
-                    outputBounds=bbox,
-                    outputBoundsSRS=f'EPSG:{epsg}',
-                    targetAlignedPixels=True)
-                ds = None  # Close dataset
-
-                emis_ds = gdal.Open(out_raster)
-                emis_arr = emis_ds.ReadAsArray()
-                emis_ds = None
                 
-                emis_arr = emis_arr * (g_to_kg / km2_to_m2)
-                print(f"{col_name} max emission: {np.nanmax(emis_arr):.4f} kg/m²")
-
-                sector_arr = np.zeros((rows, cols), dtype=np.float32)
-
+                # Get the array directly without saving to file
+                emis_arr = out_grid[col_name].values
+                emis_arr = np.nan_to_num(emis_arr, nan=0)
+                
+                # Get sector-specific proxy
                 if sec == 'A_PublicPower':
                     proxy = np.isin(clc_arr, [121]).astype(float)
                 elif sec == 'B_Industry':
@@ -295,50 +295,67 @@ def downscale_emissions(job_parameters, sectors, gdf_grid, bbox, epsg, hourly_tr
                 elif sec == 'SumAllSectors':
                     continue
 
-                proxy_sum = np.sum(proxy)
-                if proxy_sum > 0:
-                    proxy_norm = proxy / proxy_sum
-                else:
-                    proxy_norm = np.ones_like(proxy) / proxy.size
+                # Process in patches corresponding to coarse cells
+                sector_arr = np.zeros((rows, cols), dtype=np.float32)
+                
+                for i in range(0, rows, patch_size):
+                    for j in range(0, cols, patch_size):
+                        # Get current patch bounds
+                        i_end = min(i + patch_size, rows)
+                        j_end = min(j + patch_size, cols)
+                        
+                        # Get coarse cell emissions (Gg/km²)
+                        coarse_i, coarse_j = i//patch_size, j//patch_size
+                        if coarse_i >= emis_arr.shape[0] or coarse_j >= emis_arr.shape[1]:
+                            continue
+                            
+                        coarse_emis = emis_arr[coarse_i, coarse_j]
+                        
+                        if coarse_emis > 0:
+                            # Get proxy patch
+                            proxy_patch = proxy[i:i_end, j:j_end]
+                            proxy_sum = np.sum(proxy_patch)
+                            
+                            if proxy_sum > 0:
+                                # Scale proxy weights to sum to patch_size^2 to maintain mass
+                                proxy_norm = (proxy_patch / proxy_sum) * (patch_size**2)
+                            else:
+                                proxy_norm = np.ones_like(proxy_patch)
+                            
+                            # Convert directly from Gg/km² to kg/m² and distribute
+                            sector_arr[i:i_end, j:j_end] = (coarse_emis * CONV_FACTOR) * proxy_norm
 
-                for i in range(rows):
-                    for j in range(cols):
-                        sector_arr[i,j] = emis_arr[i,j] * proxy_norm[i,j]
+                # Store max output value
+                max_output = np.max(sector_arr)
+                max_output_values[spec][sec] = max_output
+                print(f"{col_name} max output: {max_output:.6f} kg/m² (Input was {max_input:.6f} Gg/km²)")
+                print(f"Conversion ratio: {max_output/(max_input*CONV_FACTOR):.2f}x")
 
                 yearly_arr[:,:,sec_idx] = sector_arr
                 hourly_emiss = apply_temporal_profiles(
-                    sector_arr, 
-                    sec, 
-                    hourly_trf, 
-                    weekly_trf, 
-                    weekend_types, 
-                    daytype_mapping, 
-                    daytype=1
+                    sector_arr, sec, hourly_trf, weekly_trf, weekend_types, daytype_mapping, daytype=1
                 )
                 hourly_arr[:,:,:,sec_idx] = hourly_emiss
-
-                if os.path.exists(tmp_raster):
-                    os.remove(tmp_raster)
-                if os.path.exists(out_raster):
-                    os.remove(out_raster)
 
             except Exception as e:
                 print(f"\nError processing {sec}: {str(e)}")
                 continue
 
+        # Sum all sectors if needed
         if 'SumAllSectors' in main_sectors:
             sum_idx = main_sectors.index('SumAllSectors')
             yearly_arr[:,:,sum_idx] = np.sum(yearly_arr[:,:,:-1], axis=2)
             hourly_arr[:,:,:,sum_idx] = np.sum(hourly_arr[:,:,:,:-1], axis=3)
             
-            downscaled_max = np.nanmax(yearly_arr[:,:,sum_idx])
-            if downscaled_max > 0:
-                scale_factor = original_max / downscaled_max
-                yearly_arr[:,:,sum_idx] *= scale_factor
-                hourly_arr[:,:,:,sum_idx] *= scale_factor
-            
-            print(f"Downscaled SumAllSectors_{spec} max emission: {np.nanmax(yearly_arr[:,:,sum_idx]):.6f} kg/m²")
+            # Calculate and print sum comparison
+            max_input_sum = gdf_grid[f'SumAllSectors_{spec}'].max()
+            max_output_sum = np.max(yearly_arr[:,:,sum_idx])
+            print(f"\nSumAllSectors_{spec}:")
+            print(f"Max input: {max_input_sum:.6f} Gg/km²")
+            print(f"Max output: {max_output_sum:.6f} kg/m²")
+            print(f"Conversion ratio: {max_output_sum/(max_input_sum*CONV_FACTOR):.2f}x")
 
+        # Create output file
         output_fn = os.path.join(job_parameters['job_path'], f'emission_{spec}_combined.tif')
         try:
             driver = gdal.GetDriverByName('GTiff')
@@ -365,15 +382,13 @@ def downscale_emissions(job_parameters, sectors, gdf_grid, bbox, epsg, hourly_tr
                     band_idx += 1
 
             metadata = {
-                'units': 'kg per m²',
-                'temporal_resolution': 'hourly + yearly',
-                'sectors': ', '.join(main_sectors),
-                'pollutant': spec,
-                'original_max': str(original_max),
-                'final_max': str(np.nanmax(yearly_arr[:,:,sum_idx]))
+                'units': 'kg/m²',
+                'conversion': 'Direct Gg/km²→kg/m²',
+                'input_max_values': str(max_input_values),
+                'output_max_values': str(max_output_values)
             }
             dst_ds.SetMetadata(metadata)
-            dst_ds = None  # Properly close the dataset
+            dst_ds = None
 
             print(f"\nSuccessfully created: {output_fn}")
 
@@ -381,5 +396,14 @@ def downscale_emissions(job_parameters, sectors, gdf_grid, bbox, epsg, hourly_tr
             print(f"\nError creating output file: {str(e)}")
             continue
 
+    
+    print("\n=== Max Value Comparison ===")
+    for spec in job_parameters['species']:
+        print(f"\nSpecies: {spec}")
+        for sec in main_sectors:
+            if sec in max_input_values[spec] and sec in max_output_values[spec]:
+                print(f"{sec}:")
+                print(f"  Input max:  {max_input_values[spec][sec]:.6f} Gg/km²")
+                print(f"  Output max: {max_output_values[spec][sec]:.6f} kg/m²")
+                print(f"  Ratio: {max_output_values[spec][sec]/(max_input_values[spec][sec]*CONV_FACTOR):.2f}x")
     print("\n=== Downscaling Completed Successfully ===")
-#######################

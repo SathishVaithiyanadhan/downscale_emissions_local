@@ -7,23 +7,23 @@ data_settings:
 
 # Simulation parameters
 job_settings:
-  job_path:  /home/vaithisa/Downscale_Emissions/Downscale_100m #/mnt/c/Users/vaithisa/PHD_Augsburg/D_S
+  job_path: /home/vaithisa/Downscale_Emissions/Downscale_10m #/mnt/c/Users/vaithisa/PHD_Augsburg/D_S
   job_name: test
-  min_lon: 634000  #full_Augsburg
-  max_lon: 649000
-  min_lat: 5345000
-  max_lat: 5373000
+  #min_lon: 634000  #full_Augsburg
+  #max_lon: 649000
+  #min_lat: 5345000
+  #max_lat: 5373000
   #min_lon: 639250 #639986.562388649    #2km x 2km
   #max_lon: 641250 #640336.562388649   
   #min_lat: 5357750 #5358540.075479806  
   #max_lat: 5359750 #5358890.075479806 
-  #min_lon: 639800  #small_domain
-  #max_lon: 640800
-  #min_lat: 5358200
-  #max_lat: 5359200
-  resol: 100
+  min_lon: 639800  #small_domain
+  max_lon: 640800
+  min_lat: 5358200
+  max_lat: 5359200
+  resol: 10
   epsg_code: 25832
-  species: [pm2_5]
+  species: [hg]
   #species: [n2o, nox, nmvoc, so2, co, pm10, pm2_5, nh3, pb, cd, hg, as, ni, bc, co2, ch4]
   country: Germany
-  inventory: GRETA                                                    
+  inventory: GRETA                 

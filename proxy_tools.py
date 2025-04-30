@@ -37,7 +37,6 @@ def bbox_transform(in_crs, out_crs, cell_minx, cell_miny, cell_maxx, cell_maxy, 
 def rasterize_clip_shp(job_parameters, out_fn, gdf, lyr, bbox, epsg):
     """Enhanced rasterization for land use data with proper handling of classes"""
     print(f"Rasterizing {lyr} to {out_fn}...")
-    tmp_fn = 'tmp_ras.tif'
     
     try:
         # Ensure weights are properly assigned
@@ -55,37 +54,21 @@ def rasterize_clip_shp(job_parameters, out_fn, gdf, lyr, bbox, epsg):
                 output_crs=f"EPSG:{epsg}"
             )
             
-            # Convert to raster
-            out_grid.rio.to_raster(tmp_fn)
-            
-            # Clip to exact bbox
-            ds = gdal.Open(tmp_fn)
-            gdal.Warp(out_fn, ds,
-                    xRes=job_parameters['resol'], 
-                    yRes=job_parameters['resol'],
-                    resampleAlg='near',  # Use nearest neighbor for categorical data
-                    format='GTiff',
-                    dstSRS=f'EPSG:{epsg}',
-                    outputBounds=(bbox[0], bbox[1], bbox[2], bbox[3]),
-                    outputBoundsSRS=f'EPSG:{epsg}',
-                    targetAlignedPixels=True,
-                    callback=gdal.TermProgress_nocb)
-            ds = None
+            # Convert directly to output file
+            out_grid.rio.to_raster(out_fn)
             
     except Exception as e:
         raise RuntimeError(f"Rasterization failed for {lyr}: {str(e)}")
-    finally:
-        if os.path.exists(tmp_fn):
-            os.remove(tmp_fn)
 
 def rasterize_line_shp(out_fn, gdf, lyr, bbox, epsg, resolution):
-    """Specialized rasterization for road features"""
+    """Specialized rasterization for road features using in-memory processing"""
     print(f"Rasterizing {lyr} to {out_fn} with smooth lines...")
     
     x_min, y_min, x_max, y_max = bbox
     cols = int((x_max - x_min) / resolution)
     rows = int((y_max - y_min) / resolution)
     
+    # Create in-memory datasource
     driver = ogr.GetDriverByName('Memory')
     ds = driver.CreateDataSource('temp')
     srs = osr.SpatialReference()
@@ -103,6 +86,7 @@ def rasterize_line_shp(out_fn, gdf, lyr, bbox, epsg, resolution):
         layer.CreateFeature(feat)
         feat = None
     
+    # Create output file directly
     driver = gdal.GetDriverByName('GTiff')
     out_ds = driver.Create(out_fn, cols, rows, 1, gdal.GDT_Float32)
     out_ds.SetGeoTransform((x_min, resolution, 0, y_max, 0, -resolution))
@@ -113,20 +97,17 @@ def rasterize_line_shp(out_fn, gdf, lyr, bbox, epsg, resolution):
                                 "BURN_VALUE_FROM=Z",
                                 "ALL_TOUCHED=TRUE"])
     
-    ds = None
-    out_ds = None
-    
     # Post-process to ensure connectivity
-    ds = gdal.Open(out_fn, gdal.GA_Update)
-    band = ds.GetRasterBand(1)
+    band = out_ds.GetRasterBand(1)
     arr = band.ReadAsArray()
     
     mask = arr > 0
     dilated = binary_dilation(mask, structure=np.ones((3,3)), iterations=1)
     arr[dilated & ~mask] = np.nanmean(arr[mask])
     band.WriteArray(arr)
-    ds.FlushCache()
+    
     ds = None
+    out_ds = None
 
 def prepare_osm_roads(bbox, epsg):
     """Prepare OSM road network with smooth lines"""
@@ -254,6 +235,10 @@ def downscaling_proxies(data_parameters, job_parameters, bbox, epsg):
     # 3. Process population density
     print("\n3. Processing population density...")
     try:
+        # First remove any existing file
+        if os.path.exists('pop_proxy.tif'):
+            os.remove('pop_proxy.tif')
+            
         gdal.Warp('pop_proxy.tif', data_parameters['popul_dir'],
                 xRes=resol, yRes=resol,
                 resampleAlg='bilinear', 
@@ -264,8 +249,6 @@ def downscaling_proxies(data_parameters, job_parameters, bbox, epsg):
                 targetAlignedPixels=True,
                 callback=gdal.TermProgress_nocb)
         
-        os.rename('pop_proxy.tif', 'pop_proxy_original.tif')
-        os.symlink('pop_proxy_original.tif', 'pop_proxy.tif')
     except Exception as e:
         raise RuntimeError(f"Population processing failed: {str(e)}")
 
