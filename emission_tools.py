@@ -1,7 +1,7 @@
 import os
 import numpy as np
 import geopandas as gpd
-from osgeo import gdal
+from osgeo import gdal, osr
 from pyproj import Transformer
 from patchify import patchify, unpatchify
 from geocube.api.core import make_geocube
@@ -14,6 +14,8 @@ import fiona
 from rasterio.features import rasterize
 from rasterio.transform import from_bounds
 import gc
+import tempfile
+from io import BytesIO
 
 gdal.UseExceptions()
 
@@ -155,6 +157,7 @@ def prep_greta_data(data_parameters, job_parameters, sectors):
     hourly_trf, weekly_trf, weekend_types, daytype_mapping = load_edgar_profiles(data_parameters)
     
     return gdf_grid, bbox_grid, bbox_epsg, hourly_trf, weekly_trf, weekend_types, daytype_mapping
+
 def apply_temporal_profiles(annual_emiss, sector, hourly_trf, weekly_trf, weekend_types, daytype_mapping, daytype=1):
     """Apply temporal profiles with enhanced road transport handling"""
     hourly_factors = np.ones(24) / 24
@@ -184,9 +187,98 @@ def apply_temporal_profiles(annual_emiss, sector, hourly_trf, weekly_trf, weeken
     hourly_emiss = np.stack([daily_emiss * factor for factor in hourly_factors], axis=0)
 
     return hourly_emiss
-#new_working
+
+def create_in_memory_raster(array, transform, projection, data_type=gdal.GDT_Float32):
+    """Create an in-memory GDAL raster from a numpy array"""
+    driver = gdal.GetDriverByName('MEM')
+    rows, cols = array.shape
+    mem_raster = driver.Create('', cols, rows, 1, data_type)
+    mem_raster.SetGeoTransform(transform)
+    mem_raster.SetProjection(projection)
+    mem_raster.GetRasterBand(1).WriteArray(array)
+    return mem_raster
+
+def calculate_mass_balance(gdf_grid, output_file, main_sectors, species):
+    """Calculate and apply mass balance scaling factors to yearly sectors"""
+    print("\n=== Calculating Mass Balance ===")
+    
+    # Open the output file in update mode
+    ds = gdal.Open(output_file, gdal.GA_Update)
+    if ds is None:
+        raise RuntimeError(f"Could not open output file {output_file}")
+    
+    # Get basic information
+    num_bands = ds.RasterCount
+    yearly_bands = len(main_sectors)  # First N bands are yearly sectors
+    
+    # Calculate cell area in m² (assuming square cells)
+    geo_transform = ds.GetGeoTransform()
+    cell_size = abs(geo_transform[1])  # Assuming square cells
+    cell_area_m2 = cell_size * cell_size
+    
+    # Dictionary to store scaling factors
+    scaling_factors = {}
+    
+    # Process each yearly sector band
+    for band_idx in range(1, yearly_bands + 1):
+        band = ds.GetRasterBand(band_idx)
+        band_name = band.GetDescription()
+        
+        # Extract sector from band name (format is "Sector_yearly")
+        sector = band_name.split('_yearly')[0]
+        
+        # Create corresponding column name
+        col_name = f"{sector}_{species}"
+        
+        # Skip if we can't determine the sector or column doesn't exist in input
+        if not sector or col_name not in gdf_grid.columns:
+            print(f"Skipping {col_name} - not found in input data")
+            continue
+            
+        # Read the downscaled data
+        downscaled_arr = band.ReadAsArray()
+        
+        # Calculate total mass in downscaled data (kg)
+        downscaled_mass = np.nansum(downscaled_arr) * cell_area_m2
+        
+        # Calculate total mass in input data (kg)
+        # Input data is in Gg/km², convert to kg/m² (1 Gg/km² = 1 kg/m²)
+        # Then multiply by area in m² to get total kg
+        input_mass_kgm2 = gdf_grid[col_name]  # Already converted to kg/m² in prep_greta_data
+        input_mass = (input_mass_kgm2 * gdf_grid.geometry.area).sum()  # kg
+        
+        # Calculate scaling factor
+        if downscaled_mass > 0:
+            scaling_factor = input_mass / downscaled_mass
+        else:
+            scaling_factor = 0.0
+            
+        scaling_factors[col_name] = {
+            'input_mass_kg': input_mass,
+            'downscaled_mass_before_kg': downscaled_mass,
+            'scaling_factor': scaling_factor,
+            'downscaled_mass_after_kg': downscaled_mass * scaling_factor
+        }
+        
+        # Apply scaling factor to the band
+        scaled_arr = downscaled_arr * scaling_factor
+        band.WriteArray(scaled_arr)
+        band.FlushCache()
+        
+        print(f"\nSector: {sector}_{species}")
+        print(f"Input mass (kg): {input_mass:.4f}")
+        print(f"Downscaled mass before scaling (kg): {downscaled_mass:.4f}")
+        print(f"Scaling factor: {scaling_factor:.6f}")
+        print(f"Downscaled mass after scaling (kg): {downscaled_mass * scaling_factor:.4f}")
+    
+    # Close the dataset
+    ds = None
+    
+    print("\n=== Mass Balance Applied ===")
+    return scaling_factors
+
 def downscale_emissions(job_parameters, sectors, gdf_grid, bbox, epsg, hourly_trf, weekly_trf, weekend_types, daytype_mapping):
-    """Enhanced downscaling with proper scaling of downscaled values"""
+    """Enhanced downscaling with proper scaling of downscaled values and in-memory processing"""
     print('\n=== Starting Emission Downscaling ===')
     print(f"Downscaling BBOX: {bbox}")
     print(f"Resolution: {job_parameters['resol']} m")
@@ -249,14 +341,10 @@ def downscale_emissions(job_parameters, sectors, gdf_grid, bbox, epsg, hourly_tr
             # Store max input value
             max_input = gdf_grid[col_name].max()
             max_input_values[spec][sec] = max_input
-            print(f"\n{col_name} max input: {max_input:.6f} Gg/km²")
-
-            # Create temporary raster at coarse resolution
-            tmp_raster = f'tmp_emission_{spec}_{sec_idx}.tif'
-            out_raster = f'emission_{spec}_{sec_idx}.tif'
+            print(f"\n{col_name} max input: {max_input:.6f} kg/m²")
 
             try:
-                # Create coarse resolution grid (keep original Gg/km² units)
+                # Create coarse resolution grid in memory (keep original Gg/km² units)
                 out_grid = make_geocube(
                     vector_data=gdf_grid,
                     measurements=[col_name],
@@ -264,21 +352,9 @@ def downscale_emissions(job_parameters, sectors, gdf_grid, bbox, epsg, hourly_tr
                     output_crs=f"EPSG:{epsg}"
                 )
                 out_grid[col_name] = out_grid[col_name].fillna(0)
-                out_grid.rio.to_raster(tmp_raster)
-
-                # Warp to exact extent at coarse resolution
-                ds = gdal.Open(tmp_raster)
-                gdal.Warp(out_raster, ds,
-                    xRes=coarse_res, yRes=coarse_res,
-                    resampleAlg='average',
-                    format='GTiff',
-                    dstSRS=f'EPSG:{epsg}',
-                    outputBounds=bbox,
-                    outputBoundsSRS=f'EPSG:{epsg}',
-                    targetAlignedPixels=True)
-                emis_ds = gdal.Open(out_raster)
-                emis_arr = emis_ds.ReadAsArray()
-                emis_ds = None
+                
+                # Convert to numpy array directly
+                emis_arr = out_grid[col_name].values
                 
                 # Get sector-specific proxy
                 if sec == 'A_PublicPower':
@@ -319,7 +395,7 @@ def downscale_emissions(job_parameters, sectors, gdf_grid, bbox, epsg, hourly_tr
                         i_end = min(i + patch_size, rows)
                         j_end = min(j + patch_size, cols)
                         
-                        # Get coarse cell emissions (Gg/km²)
+                        # Get coarse cell emissions (kg/m²)
                         coarse_i, coarse_j = i//patch_size, j//patch_size
                         if coarse_i >= emis_arr.shape[0] or coarse_j >= emis_arr.shape[1]:
                             continue
@@ -337,25 +413,20 @@ def downscale_emissions(job_parameters, sectors, gdf_grid, bbox, epsg, hourly_tr
                             else:
                                 proxy_norm = np.ones_like(proxy_patch)
                             
-                            # Convert directly from Gg/km² to kg/m² and distribute
-                            sector_arr[i:i_end, j:j_end] = (coarse_emis * CONV_FACTOR) * proxy_norm
+                            # Distribute emissions using proxy weights
+                            sector_arr[i:i_end, j:j_end] = coarse_emis * proxy_norm
 
                 # Store max output value
                 max_output = np.max(sector_arr)
                 max_output_values[spec][sec] = max_output
-                print(f"{col_name} max output: {max_output:.6f} kg/m² (Input was {max_input:.6f} Gg/km²)")
-                print(f"Conversion ratio: {max_output/(max_input*CONV_FACTOR):.2f}x")
+                print(f"{col_name} max output: {max_output:.6f} kg/m² (Input was {max_input:.6f} kg/m²)")
+                print(f"Conversion ratio: {max_output/max_input:.2f}x")
 
                 yearly_arr[:,:,sec_idx] = sector_arr
                 hourly_emiss = apply_temporal_profiles(
                     sector_arr, sec, hourly_trf, weekly_trf, weekend_types, daytype_mapping, daytype=1
                 )
                 hourly_arr[:,:,:,sec_idx] = hourly_emiss
-
-                if os.path.exists(tmp_raster):
-                    os.remove(tmp_raster)
-                if os.path.exists(out_raster):
-                    os.remove(out_raster)
 
             except Exception as e:
                 print(f"\nError processing {sec}: {str(e)}")
@@ -371,9 +442,9 @@ def downscale_emissions(job_parameters, sectors, gdf_grid, bbox, epsg, hourly_tr
             max_input_sum = gdf_grid[f'SumAllSectors_{spec}'].max()
             max_output_sum = np.max(yearly_arr[:,:,sum_idx])
             print(f"\nSumAllSectors_{spec}:")
-            print(f"Max input: {max_input_sum:.6f} Gg/km²")
+            print(f"Max input: {max_input_sum:.6f} kg/m²")
             print(f"Max output: {max_output_sum:.6f} kg/m²")
-            print(f"Conversion ratio: {max_output_sum/(max_input_sum*CONV_FACTOR):.2f}x")
+            print(f"Conversion ratio: {max_output_sum/max_input_sum:.2f}x")
 
         # Create output file
         output_fn = os.path.join(job_parameters['job_path'], f'emission_{spec}_combined.tif')
@@ -412,19 +483,27 @@ def downscale_emissions(job_parameters, sectors, gdf_grid, bbox, epsg, hourly_tr
 
             print(f"\nSuccessfully created: {output_fn}")
 
+            # Calculate and apply mass balance scaling factors
+            scaling_factors = calculate_mass_balance(gdf_grid, output_fn, main_sectors, spec)
+            
+            # Update metadata with scaling factors
+            ds = gdal.Open(output_fn, gdal.GA_Update)
+            if ds:
+                metadata = ds.GetMetadata()
+                metadata['scaling_factors'] = str(scaling_factors)
+                ds.SetMetadata(metadata)
+                ds = None
+
         except Exception as e:
             print(f"\nError creating output file: {str(e)}")
             continue
 
-    
-    #print("\n=== Max Value Comparison ===")
     for spec in job_parameters['species']:
         print(f"\nSpecies: {spec}")
         for sec in main_sectors:
             if sec in max_input_values[spec] and sec in max_output_values[spec]:
                 print(f"{sec}:")
-                print(f"  Input max:  {max_input_values[spec][sec]:.6f} Gg/km²")
+                print(f"  Input max:  {max_input_values[spec][sec]:.6f} kg/m²")
                 print(f"  Output max: {max_output_values[spec][sec]:.6f} kg/m²")
-                print(f"  Ratio: {max_output_values[spec][sec]/(max_input_values[spec][sec]*CONV_FACTOR):.2f}x")
+                print(f"  Ratio: {max_output_values[spec][sec]/max_input_values[spec][sec]:.2f}x")
     print("\n=== Downscaling Completed Successfully ===")
-##########
