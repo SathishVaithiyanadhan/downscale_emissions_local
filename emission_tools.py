@@ -1,6 +1,8 @@
+
 import os
 import numpy as np
 import geopandas as gpd
+import pandas as pd
 from osgeo import gdal, osr
 from pyproj import Transformer
 from patchify import patchify, unpatchify
@@ -198,85 +200,6 @@ def create_in_memory_raster(array, transform, projection, data_type=gdal.GDT_Flo
     mem_raster.GetRasterBand(1).WriteArray(array)
     return mem_raster
 
-def calculate_mass_balance(gdf_grid, output_file, main_sectors, species):
-    """Calculate and apply mass balance scaling factors to yearly sectors"""
-    print("\n=== Calculating Mass Balance ===")
-    
-    # Open the output file in update mode
-    ds = gdal.Open(output_file, gdal.GA_Update)
-    if ds is None:
-        raise RuntimeError(f"Could not open output file {output_file}")
-    
-    # Get basic information
-    num_bands = ds.RasterCount
-    yearly_bands = len(main_sectors)  # First N bands are yearly sectors
-    
-    # Calculate cell area in m² (assuming square cells)
-    geo_transform = ds.GetGeoTransform()
-    cell_size = abs(geo_transform[1])  # Assuming square cells
-    cell_area_m2 = cell_size * cell_size
-    
-    # Dictionary to store scaling factors
-    scaling_factors = {}
-    
-    # Process each yearly sector band
-    for band_idx in range(1, yearly_bands + 1):
-        band = ds.GetRasterBand(band_idx)
-        band_name = band.GetDescription()
-        
-        # Extract sector from band name (format is "Sector_yearly")
-        sector = band_name.split('_yearly')[0]
-        
-        # Create corresponding column name
-        col_name = f"{sector}_{species}"
-        
-        # Skip if we can't determine the sector or column doesn't exist in input
-        if not sector or col_name not in gdf_grid.columns:
-            print(f"Skipping {col_name} - not found in input data")
-            continue
-            
-        # Read the downscaled data
-        downscaled_arr = band.ReadAsArray()
-        
-        # Calculate total mass in downscaled data (kg)
-        downscaled_mass = np.nansum(downscaled_arr) * cell_area_m2
-        
-        # Calculate total mass in input data (kg)
-        # Input data is in Gg/km², convert to kg/m² (1 Gg/km² = 1 kg/m²)
-        # Then multiply by area in m² to get total kg
-        input_mass_kgm2 = gdf_grid[col_name]  # Already converted to kg/m² in prep_greta_data
-        input_mass = (input_mass_kgm2 * gdf_grid.geometry.area).sum()  # kg
-        
-        # Calculate scaling factor
-        if downscaled_mass > 0:
-            scaling_factor = input_mass / downscaled_mass
-        else:
-            scaling_factor = 0.0
-            
-        scaling_factors[col_name] = {
-            'input_mass_kg': input_mass,
-            'downscaled_mass_before_kg': downscaled_mass,
-            'scaling_factor': scaling_factor,
-            'downscaled_mass_after_kg': downscaled_mass * scaling_factor
-        }
-        
-        # Apply scaling factor to the band
-        scaled_arr = downscaled_arr * scaling_factor
-        band.WriteArray(scaled_arr)
-        band.FlushCache()
-        
-        print(f"\nSector: {sector}_{species}")
-        print(f"Input mass (kg): {input_mass:.4f}")
-        print(f"Downscaled mass before scaling (kg): {downscaled_mass:.4f}")
-        print(f"Scaling factor: {scaling_factor:.6f}")
-        print(f"Downscaled mass after scaling (kg): {downscaled_mass * scaling_factor:.4f}")
-    
-    # Close the dataset
-    ds = None
-    
-    print("\n=== Mass Balance Applied ===")
-    return scaling_factors
-
 def downscale_emissions(job_parameters, sectors, gdf_grid, bbox, epsg, hourly_trf, weekly_trf, weekend_types, daytype_mapping):
     """Enhanced downscaling with proper scaling of downscaled values and in-memory processing"""
     print('\n=== Starting Emission Downscaling ===')
@@ -341,7 +264,7 @@ def downscale_emissions(job_parameters, sectors, gdf_grid, bbox, epsg, hourly_tr
             # Store max input value
             max_input = gdf_grid[col_name].max()
             max_input_values[spec][sec] = max_input
-            print(f"\n{col_name} max input: {max_input:.6f} kg/m²")
+            print(f"\n{col_name} max input: {max_input:.6f} Gg/km²")
 
             try:
                 # Create coarse resolution grid in memory (keep original Gg/km² units)
@@ -395,7 +318,7 @@ def downscale_emissions(job_parameters, sectors, gdf_grid, bbox, epsg, hourly_tr
                         i_end = min(i + patch_size, rows)
                         j_end = min(j + patch_size, cols)
                         
-                        # Get coarse cell emissions (kg/m²)
+                        # Get coarse cell emissions (Gg/km²)
                         coarse_i, coarse_j = i//patch_size, j//patch_size
                         if coarse_i >= emis_arr.shape[0] or coarse_j >= emis_arr.shape[1]:
                             continue
@@ -413,14 +336,14 @@ def downscale_emissions(job_parameters, sectors, gdf_grid, bbox, epsg, hourly_tr
                             else:
                                 proxy_norm = np.ones_like(proxy_patch)
                             
-                            # Distribute emissions using proxy weights
-                            sector_arr[i:i_end, j:j_end] = coarse_emis * proxy_norm
+                            # Convert directly from Gg/km² to kg/m² and distribute
+                            sector_arr[i:i_end, j:j_end] = (coarse_emis * CONV_FACTOR) * proxy_norm
 
                 # Store max output value
                 max_output = np.max(sector_arr)
                 max_output_values[spec][sec] = max_output
-                print(f"{col_name} max output: {max_output:.6f} kg/m² (Input was {max_input:.6f} kg/m²)")
-                print(f"Conversion ratio: {max_output/max_input:.2f}x")
+                print(f"{col_name} max output: {max_output:.6f} kg/m² (Input was {max_input:.6f} Gg/km²)")
+                print(f"Conversion ratio: {max_output/(max_input*CONV_FACTOR):.2f}x")
 
                 yearly_arr[:,:,sec_idx] = sector_arr
                 hourly_emiss = apply_temporal_profiles(
@@ -442,9 +365,9 @@ def downscale_emissions(job_parameters, sectors, gdf_grid, bbox, epsg, hourly_tr
             max_input_sum = gdf_grid[f'SumAllSectors_{spec}'].max()
             max_output_sum = np.max(yearly_arr[:,:,sum_idx])
             print(f"\nSumAllSectors_{spec}:")
-            print(f"Max input: {max_input_sum:.6f} kg/m²")
+            print(f"Max input: {max_input_sum:.6f} Gg/km²")
             print(f"Max output: {max_output_sum:.6f} kg/m²")
-            print(f"Conversion ratio: {max_output_sum/max_input_sum:.2f}x")
+            print(f"Conversion ratio: {max_output_sum/(max_input_sum*CONV_FACTOR):.2f}x")
 
         # Create output file
         output_fn = os.path.join(job_parameters['job_path'], f'emission_{spec}_combined.tif')
@@ -483,17 +406,6 @@ def downscale_emissions(job_parameters, sectors, gdf_grid, bbox, epsg, hourly_tr
 
             print(f"\nSuccessfully created: {output_fn}")
 
-            # Calculate and apply mass balance scaling factors
-            scaling_factors = calculate_mass_balance(gdf_grid, output_fn, main_sectors, spec)
-            
-            # Update metadata with scaling factors
-            ds = gdal.Open(output_fn, gdal.GA_Update)
-            if ds:
-                metadata = ds.GetMetadata()
-                metadata['scaling_factors'] = str(scaling_factors)
-                ds.SetMetadata(metadata)
-                ds = None
-
         except Exception as e:
             print(f"\nError creating output file: {str(e)}")
             continue
@@ -503,7 +415,7 @@ def downscale_emissions(job_parameters, sectors, gdf_grid, bbox, epsg, hourly_tr
         for sec in main_sectors:
             if sec in max_input_values[spec] and sec in max_output_values[spec]:
                 print(f"{sec}:")
-                print(f"  Input max:  {max_input_values[spec][sec]:.6f} kg/m²")
+                print(f"  Input max:  {max_input_values[spec][sec]:.6f} Gg/km²")
                 print(f"  Output max: {max_output_values[spec][sec]:.6f} kg/m²")
-                print(f"  Ratio: {max_output_values[spec][sec]/max_input_values[spec][sec]:.2f}x")
+                print(f"  Ratio: {max_output_values[spec][sec]/(max_input_values[spec][sec]*CONV_FACTOR):.2f}x")
     print("\n=== Downscaling Completed Successfully ===")
