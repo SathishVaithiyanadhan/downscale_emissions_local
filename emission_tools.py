@@ -7,7 +7,6 @@ from osgeo import gdal, osr
 from pyproj import Transformer
 from patchify import patchify, unpatchify
 from geocube.api.core import make_geocube
-import pandas as pd
 import matplotlib.pyplot as plt
 from tqdm import tqdm
 import rasterio
@@ -64,35 +63,6 @@ def nfr_to_gnfr(job_parameters, gdf_data, sectors):
         col_out = ['ID_RASTER_left', 'geometry'] + col_sum
     
     return gdf_data[col_out].drop_duplicates()
-
-def load_edgar_profiles(data_parameters):
-    """Load EDGAR profiles with robust encoding handling"""
-    try:
-        hourly_df = pd.read_csv(data_parameters['edgar_hourly'], encoding='utf-8')
-    except UnicodeDecodeError:
-        hourly_df = pd.read_csv(data_parameters['edgar_hourly'], encoding='iso-8859-1')
-    
-    try:
-        weekly_df = pd.read_csv(data_parameters['edgar_weekly'], encoding='utf-8')
-    except UnicodeDecodeError:
-        weekly_df = pd.read_csv(data_parameters['edgar_weekly'], encoding='iso-8859-1')
-    
-    try:
-        weekend_types = pd.read_csv(data_parameters['weekend_types'], sep=';', encoding='utf-8')
-    except UnicodeDecodeError:
-        weekend_types = pd.read_csv(data_parameters['weekend_types'], sep=';', encoding='iso-8859-1')
-    
-    try:
-        daytype_mapping = pd.read_csv(data_parameters['daytype_mapping'], sep=';', encoding='utf-8')
-    except UnicodeDecodeError:
-        daytype_mapping = pd.read_csv(data_parameters['daytype_mapping'], sep=';', encoding='iso-8859-1')
-
-    hourly_trf = hourly_df[(hourly_df['Country_code_A3'] == 'DEU') & 
-                          (hourly_df['activity_code'] == 'TRF')].copy()
-    weekly_trf = weekly_df[(weekly_df['Country_code_A3'] == 'DEU') & 
-                          (weekly_df['activity_code'] == 'TRF')].copy()
-    
-    return hourly_trf, weekly_trf, weekend_types, daytype_mapping
 
 def prep_greta_data(data_parameters, job_parameters, sectors):
     """Prepare GRETA data with enhanced error handling and proper unit conversion"""
@@ -156,39 +126,7 @@ def prep_greta_data(data_parameters, job_parameters, sectors):
             if col_name in gdf_grid.columns:
                 gdf_grid[col_name] = gdf_grid[col_name] * conversion_factor  # Gg/km² → kg/m²
 
-    hourly_trf, weekly_trf, weekend_types, daytype_mapping = load_edgar_profiles(data_parameters)
-    
-    return gdf_grid, bbox_grid, bbox_epsg, hourly_trf, weekly_trf, weekend_types, daytype_mapping
-
-def apply_temporal_profiles(annual_emiss, sector, hourly_trf, weekly_trf, weekend_types, daytype_mapping, daytype=1):
-    """Apply temporal profiles with enhanced road transport handling"""
-    hourly_factors = np.ones(24) / 24
-    weekly_factor = 1 / 7
-
-    weekday_mask = (daytype_mapping['Daytype_id'] == daytype) & \
-                  (daytype_mapping['Weekend_type_id'] == 4)
-    weekday_id = daytype_mapping.loc[weekday_mask, 'Weekday_id'].values
-    weekday_id = weekday_id[0] if len(weekday_id) > 0 else 1
-
-    if sector == 'F_RoadTransport':
-        if not weekly_trf.empty:
-            weekly_factor = weekly_trf.loc[
-                weekly_trf['Weekday_id'] == weekday_id, 'daily_factor'
-            ].values[0]
-        
-        if not hourly_trf.empty:
-            hourly_row = hourly_trf[hourly_trf['Daytype_id'] == daytype]
-            if not hourly_row.empty:
-                hourly_cols = [f'h{h}' for h in range(1, 25)]
-                hourly_factors = hourly_row[hourly_cols].values[0]
-                
-                if np.sum(hourly_factors) > 0:
-                    hourly_factors = hourly_factors / np.sum(hourly_factors)
-
-    daily_emiss = annual_emiss * weekly_factor / 365
-    hourly_emiss = np.stack([daily_emiss * factor for factor in hourly_factors], axis=0)
-
-    return hourly_emiss
+    return gdf_grid, bbox_grid, bbox_epsg
 
 def create_in_memory_raster(array, transform, projection, data_type=gdal.GDT_Float32):
     """Create an in-memory GDAL raster from a numpy array"""
@@ -200,7 +138,7 @@ def create_in_memory_raster(array, transform, projection, data_type=gdal.GDT_Flo
     mem_raster.GetRasterBand(1).WriteArray(array)
     return mem_raster
 
-def downscale_emissions(job_parameters, sectors, gdf_grid, bbox, epsg, hourly_trf, weekly_trf, weekend_types, daytype_mapping):
+def downscale_emissions(job_parameters, sectors, gdf_grid, bbox, epsg):
     """Enhanced downscaling with proper scaling of downscaled values and in-memory processing"""
     print('\n=== Starting Emission Downscaling ===')
     print(f"Downscaling BBOX: {bbox}")
@@ -250,7 +188,6 @@ def downscale_emissions(job_parameters, sectors, gdf_grid, bbox, epsg, hourly_tr
 
     for spec in tqdm(job_parameters['species'], desc="Processing species"):
         yearly_arr = np.zeros((rows, cols, len(sectors)), dtype=np.float32)
-        hourly_arr = np.zeros((24, rows, cols, len(sectors)), dtype=np.float32)
         max_input_values[spec] = {}
         max_output_values[spec] = {}
 
@@ -346,10 +283,6 @@ def downscale_emissions(job_parameters, sectors, gdf_grid, bbox, epsg, hourly_tr
                 print(f"Conversion ratio: {max_output/(max_input*CONV_FACTOR):.2f}x")
 
                 yearly_arr[:,:,sec_idx] = sector_arr
-                hourly_emiss = apply_temporal_profiles(
-                    sector_arr, sec, hourly_trf, weekly_trf, weekend_types, daytype_mapping, daytype=1
-                )
-                hourly_arr[:,:,:,sec_idx] = hourly_emiss
 
             except Exception as e:
                 print(f"\nError processing {sec}: {str(e)}")
@@ -359,7 +292,6 @@ def downscale_emissions(job_parameters, sectors, gdf_grid, bbox, epsg, hourly_tr
         if 'SumAllSectors' in main_sectors:
             sum_idx = main_sectors.index('SumAllSectors')
             yearly_arr[:,:,sum_idx] = np.sum(yearly_arr[:,:,:-1], axis=2)
-            hourly_arr[:,:,:,sum_idx] = np.sum(hourly_arr[:,:,:,:-1], axis=3)
             
             # Calculate and print sum comparison
             max_input_sum = gdf_grid[f'SumAllSectors_{spec}'].max()
@@ -370,36 +302,37 @@ def downscale_emissions(job_parameters, sectors, gdf_grid, bbox, epsg, hourly_tr
             print(f"Conversion ratio: {max_output_sum/(max_input_sum*CONV_FACTOR):.2f}x")
 
         # Create output file
-        output_fn = os.path.join(job_parameters['job_path'], f'emission_{spec}_combined.tif')
+        # Create output file with space for all bands (13 yearly + 24*13 hourly)
+        output_fn = os.path.join(job_parameters['job_path'], f'emission_{spec}_yearly.tif')
         try:
             driver = gdal.GetDriverByName('GTiff')
             dst_ds = driver.Create(
                 output_fn,
                 cols,
                 rows,
-                len(main_sectors) * 25,
+                13,  #325,  # 13 yearly + 312 hourly bands
                 gdal.GDT_Float32
             )
             dst_ds.SetGeoTransform(clc_trans)
             dst_ds.SetProjection(clc_wkt)
 
-            band_idx = 1
+            # Write yearly bands (1-13)
             for sec_idx, sec in enumerate(main_sectors):
-                dst_ds.GetRasterBand(band_idx).WriteArray(yearly_arr[:,:,sec_idx])
-                dst_ds.GetRasterBand(band_idx).SetDescription(f"{sec}_yearly")
-                band_idx += 1
+                dst_ds.GetRasterBand(sec_idx+1).WriteArray(yearly_arr[:,:,sec_idx])
+                dst_ds.GetRasterBand(sec_idx+1).SetDescription(f"{sec}_yearly")
 
-            for hour in range(24):
-                for sec_idx, sec in enumerate(main_sectors):
-                    dst_ds.GetRasterBand(band_idx).WriteArray(hourly_arr[hour,:,:,sec_idx])
-                    dst_ds.GetRasterBand(band_idx).SetDescription(f"{sec}_h{hour+1}")
-                    band_idx += 1
+            # Initialize hourly bands (14-325) with zeros
+            #for band_idx in range(14, 326):
+                #band = dst_ds.GetRasterBand(band_idx)
+                #band.WriteArray(np.zeros((rows, cols), dtype=np.float32))
+                ## Description will be set during temporal disaggregation
 
             metadata = {
                 'units': 'kg/m²',
                 'conversion': 'Direct Gg/km²→kg/m²',
                 'input_max_values': str(max_input_values),
-                'output_max_values': str(max_output_values)
+                'output_max_values': str(max_output_values),
+                'temporal_status': 'Yearly_only'
             }
             dst_ds.SetMetadata(metadata)
             dst_ds = None
@@ -418,4 +351,5 @@ def downscale_emissions(job_parameters, sectors, gdf_grid, bbox, epsg, hourly_tr
                 print(f"  Input max:  {max_input_values[spec][sec]:.6f} Gg/km²")
                 print(f"  Output max: {max_output_values[spec][sec]:.6f} kg/m²")
                 print(f"  Ratio: {max_output_values[spec][sec]/(max_input_values[spec][sec]*CONV_FACTOR):.2f}x")
-    print("\n=== Downscaling Completed Successfully ===")
+    
+#######

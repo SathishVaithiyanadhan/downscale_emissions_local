@@ -1,4 +1,3 @@
-
 import numpy as np
 from osgeo import gdal
 import geopandas as gpd
@@ -33,7 +32,7 @@ def process_species(args):
         print(f"Input mass for {sector_name}_{spec}: {total_mass:.6f} kg")
 
     # Process downscaled GeoTIFF
-    tiff_path = os.path.join(job_params['job_path'], f'emission_{spec}_combined.tif')
+    tiff_path = os.path.join(job_params['job_path'], f'emission_{spec}_yearly.tif')
     if not os.path.exists(tiff_path):
         print(f"Warning: Downscaled file not found: {tiff_path}")
         return None
@@ -142,4 +141,4 @@ def calculate_mass_balance(job_parameters, data_parameters, sectors, species):
                 sector = sectors[i][0]
                 print(f"{sector}: Input={input_masses[i]:.2f}kg, Output={output_masses[i]:.2f}kg, Ratio={input_masses[i]/output_masses[i]:.4f}")
 
-    print("\n=== Parallel Mass Balance Correction Completed ===")
+    

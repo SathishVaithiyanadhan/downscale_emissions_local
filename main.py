@@ -1,10 +1,10 @@
-
 from tools import *
 from emission_tools import *
 from proxy_tools import *
 from mass_balance_tools import calculate_mass_balance
+from temporal_profiles import TemporalProfiler
 from osgeo import gdal
-gdal.UseExceptions()
+import os
 
 def main():
     ## Read Configuration file
@@ -26,16 +26,20 @@ def main():
             ['SumAllSectors', 'SUM']]
 
     if job_parameters['inventory'] == 'GRETA':
-        gdf_grid, bbox_grid, bbox_epsg, hourly_trf, weekly_trf, weekend_types, daytype_mapping = prep_greta_data(data_parameters, job_parameters, sectors)
+        gdf_grid, bbox_grid, bbox_epsg = prep_greta_data(data_parameters, job_parameters, sectors)
     elif job_parameters['inventory'] == 'TNO':
         print('Prep TNO Emissions')
     
     ## Create proxies and downscale
     downscaling_proxies(data_parameters, job_parameters, bbox_grid, bbox_epsg)
-    downscale_emissions(job_parameters, sectors, gdf_grid, bbox_grid, bbox_epsg, hourly_trf, weekly_trf, weekend_types, daytype_mapping)
+    downscale_emissions(job_parameters, sectors, gdf_grid, bbox_grid, bbox_epsg)
 
     ## Apply mass balance correction
     calculate_mass_balance(job_parameters, data_parameters, sectors, job_parameters['species'])
+
+    ## Apply temporal disaggregation
+    profiler = TemporalProfiler(data_parameters, job_parameters)
+    profiler.apply_temporal_profiles(job_parameters, sectors)
 
 if __name__ == "__main__":
     main()

@@ -29,12 +29,21 @@ def config_parameters():
         data_parameters = config['data_settings']
         job_parameters = config['job_settings']
 
-        # Add EDGAR file paths
-        data_parameters['edgar_hourly'] = os.path.join(data_parameters['edgar_dir'], 'auxiliary_tables/hourly_profiles.csv')
-        data_parameters['edgar_weekly'] = os.path.join(data_parameters['edgar_dir'], 'auxiliary_tables/weekly_profiles.csv')
-        data_parameters['edgar_monthly'] = os.path.join(data_parameters['edgar_dir'], 'EDGAR_temporal_profiles_r1.xlsx')
-        data_parameters['weekend_types'] = os.path.join(data_parameters['edgar_dir'], 'auxiliary_tables/weekenddays.csv')
-        data_parameters['daytype_mapping'] = os.path.join(data_parameters['edgar_dir'], 'auxiliary_tables/weekdays.csv')
+        # Add EDGAR file paths with validation
+        required_temporal_files = {
+            'edgar_hourly': 'auxiliary_tables/hourly_profiles.csv',
+            'edgar_weekly': 'auxiliary_tables/weekly_profiles.csv',
+            'weekend_types': 'auxiliary_tables/weekenddays.csv',
+            'daytype_mapping': 'auxiliary_tables/weekdays.csv',
+            'edgar_monthly': 'EDGAR_temporal_profiles_r1.xlsx',
+            'greta_to_edgar': 'emission_time_factors.xlsx'
+        }
+
+        for key, rel_path in required_temporal_files.items():
+            full_path = os.path.join(data_parameters['edgar_dir'], rel_path)
+            if not os.path.exists(full_path):
+                raise FileNotFoundError(f"Temporal profile file not found: {full_path}")
+            data_parameters[key] = full_path
 
     # Add explicit bbox validation
     data_parameters['bbox'] = [
