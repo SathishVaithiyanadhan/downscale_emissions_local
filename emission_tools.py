@@ -201,7 +201,6 @@ def downscale_emissions(job_parameters, sectors, gdf_grid, bbox, epsg):
             # Store max input value
             max_input = gdf_grid[col_name].max()
             max_input_values[spec][sec] = max_input
-            print(f"\n{col_name} max input: {max_input:.6f} Gg/km²")
 
             try:
                 # Create coarse resolution grid in memory (keep original Gg/km² units)
@@ -279,8 +278,6 @@ def downscale_emissions(job_parameters, sectors, gdf_grid, bbox, epsg):
                 # Store max output value
                 max_output = np.max(sector_arr)
                 max_output_values[spec][sec] = max_output
-                print(f"{col_name} max output: {max_output:.6f} kg/m² (Input was {max_input:.6f} Gg/km²)")
-                print(f"Conversion ratio: {max_output/(max_input*CONV_FACTOR):.2f}x")
 
                 yearly_arr[:,:,sec_idx] = sector_arr
 
@@ -296,10 +293,6 @@ def downscale_emissions(job_parameters, sectors, gdf_grid, bbox, epsg):
             # Calculate and print sum comparison
             max_input_sum = gdf_grid[f'SumAllSectors_{spec}'].max()
             max_output_sum = np.max(yearly_arr[:,:,sum_idx])
-            print(f"\nSumAllSectors_{spec}:")
-            print(f"Max input: {max_input_sum:.6f} Gg/km²")
-            print(f"Max output: {max_output_sum:.6f} kg/m²")
-            print(f"Conversion ratio: {max_output_sum/(max_input_sum*CONV_FACTOR):.2f}x")
 
         # Create output file
         # Create output file with space for all bands (13 yearly + 24*13 hourly)
@@ -321,12 +314,6 @@ def downscale_emissions(job_parameters, sectors, gdf_grid, bbox, epsg):
                 dst_ds.GetRasterBand(sec_idx+1).WriteArray(yearly_arr[:,:,sec_idx])
                 dst_ds.GetRasterBand(sec_idx+1).SetDescription(f"{sec}_yearly")
 
-            # Initialize hourly bands (14-325) with zeros
-            #for band_idx in range(14, 326):
-                #band = dst_ds.GetRasterBand(band_idx)
-                #band.WriteArray(np.zeros((rows, cols), dtype=np.float32))
-                ## Description will be set during temporal disaggregation
-
             metadata = {
                 'units': 'kg/m²',
                 'conversion': 'Direct Gg/km²→kg/m²',
@@ -342,14 +329,5 @@ def downscale_emissions(job_parameters, sectors, gdf_grid, bbox, epsg):
         except Exception as e:
             print(f"\nError creating output file: {str(e)}")
             continue
-
-    for spec in job_parameters['species']:
-        print(f"\nSpecies: {spec}")
-        for sec in main_sectors:
-            if sec in max_input_values[spec] and sec in max_output_values[spec]:
-                print(f"{sec}:")
-                print(f"  Input max:  {max_input_values[spec][sec]:.6f} Gg/km²")
-                print(f"  Output max: {max_output_values[spec][sec]:.6f} kg/m²")
-                print(f"  Ratio: {max_output_values[spec][sec]/(max_input_values[spec][sec]*CONV_FACTOR):.2f}x")
     
 #######
