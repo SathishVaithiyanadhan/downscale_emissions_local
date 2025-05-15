@@ -32,6 +32,4 @@ job_settings:
     start_date: "2017-04-22"  # Start date
     end_date: "2017-04-23" 
     country: "DEU"  # Added country code
-    profile_year: 2017    # End date
-    default_month: 04         # Default month if not specified (1-12)
-    default_daytype: 1        # 1=weekday (0-4), 2=saturday (5), 3=sunday (6)               
+    profile_year: 2017    # End date             

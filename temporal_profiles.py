@@ -119,9 +119,6 @@ class TemporalProfiler:
         if not hourly_data.empty:
             hour_cols = [f'h{h}' for h in range(1, 25)]
             hourly_factors = hourly_data[hour_cols].values[0]
-            print(f"\nHourly Factors for {greta_sector} ({date.strftime('%Y-%m-%d')}):")
-            print(f"Peak hours (8,12,18): {hourly_factors[7]}, {hourly_factors[11]}, {hourly_factors[17]}")
-            print(f"Night hours (1,4,23): {hourly_factors[0]}, {hourly_factors[3]}, {hourly_factors[22]}")
         else:
             hourly_factors = np.ones(24)/24
             print(f"No hourly profile for {edgar_sector}, using uniform distribution")
