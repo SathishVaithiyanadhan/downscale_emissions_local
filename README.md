@@ -15,7 +15,7 @@ This code repository downscales a gridded emission inventory using surface chara
 4. Output in GeoTIFF format
 
 
-## The tool consists of five main components:
+## The tool consists of seven main components:
 
 1. Configuration parser (tools.py) - Handles YAML configuration
 
@@ -23,9 +23,13 @@ This code repository downscales a gridded emission inventory using surface chara
 
 3. Emission processing (emission_tools.py) - Core downscaling algorithms
 
-4. Main workflow (main.py) - Orchestrates the process
+4. The mass balance evaluation (mass_balance_tools.py) - Ensures the mass balance in the downscaled emissions wrt the Emission inventory.
 
-5. The input configuration file (default_config.yaml)
+5. The Temporal disaggregation of emissions (temporal_profiles.py) - Applies the Edgar's temporal profiles to the yearly downscaled emissions for the high temporal resolution of emissions (yearly -> hourly)
+
+6. Main workflow (main.py) - Orchestrates the process
+
+7. The input configuration file (default_config.yaml)
 
 ## Input data
 The following data is required to downscale a emission inventory using this tool.
@@ -76,7 +80,12 @@ The following data is required to downscale a emission inventory using this tool
 | species | List of species to be downscaled. **Hint:** GRETA requires both PM10  & PM2.5 |
 | country | Country location of model domain. |
 | inventory | Emission inventory used. `GRETA or TNO` |
-
+| temporal | 
+| apply_temporal | If Temporal disaggregation of emissions is required, then set True, if not False |
+| start_date | Specify the starting date for temporal disaggregation |
+| end_date | Specify the ending date for temporal disaggregation |
+| country | Edgar's country code |
+| profile_year | Specify the year of the emissions |
 
 ## Authors and acknowledgment
 Show your appreciation to those who have contributed to the project.
@@ -90,8 +99,5 @@ For details and comments, please contact:
 For open source projects, say how it is licensed.
 
 ## TO-DO
-* Add code to prepare TNO emissions as input
-* Add option to temporally distribute emissions
 * Add checks to verify input parameter in configuration file.
-* Add option to merge point sources and gridded data
 * Add aerosol size distribution
