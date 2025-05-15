@@ -53,6 +53,8 @@ The following data is required to downscale a emission inventory using this tool
 	* [Download](https://edgar.jrc.ec.europa.eu/dataset_temp_profile)
 5. OpenStreetMap(OSM)
 	* Retrieved using the OSMnx API
+6. emission_time_factors.xlsx 
+    * The XLSX file that connects GRETA sectors with teh EDGAR sectors. (Save this file in the EDGAR folder together with the EDGAR temporal profiles, the file is in the repo for your refernce.)
 
 ## Usage
 * Use `downscale_greta_env.yaml` file to install all the required dependencies.
@@ -80,7 +82,7 @@ The following data is required to downscale a emission inventory using this tool
 | species | List of species to be downscaled. **Hint:** GRETA requires both PM10  & PM2.5 |
 | country | Country location of model domain. |
 | inventory | Emission inventory used. `GRETA or TNO` |
-| temporal | 
+| **temporal** | |
 | apply_temporal | If Temporal disaggregation of emissions is required, then set True, if not False |
 | start_date | Specify the starting date for temporal disaggregation |
 | end_date | Specify the ending date for temporal disaggregation |
