@@ -184,10 +184,14 @@ class TemporalProfiler:
                         for hour in range(24):
                             hour_emis = daily_emiss * hourly_factors[hour]
                             out_ds.GetRasterBand(band_idx).WriteArray(hour_emis)
+                            
+                            # MODIFIED SECTION: Add leading zero to hours 1-9
+                            hour_str = f"{hour+1:02d}"  # This formats 1 as '01', 9 as '09', 10 as '10'
                             out_ds.GetRasterBand(band_idx).SetDescription(
-                                f"{sec}_h{hour+1}_{current_date.strftime('%Y%m%d')}")
+                                f"{sec}_h{hour_str}_{current_date.strftime('%Y%m%d')}")
+                            
                             # Track min/max values
-                            band_desc = f"{sec}_h{hour+1}_{current_date.strftime('%Y%m%d')}"
+                            band_desc = f"{sec}_h{hour_str}_{current_date.strftime('%Y%m%d')}"
                             min_max_values[band_desc] = {
                                 'min': np.nanmin(hour_emis),
                                 'max': np.nanmax(hour_emis),
@@ -196,6 +200,7 @@ class TemporalProfiler:
                             band_idx += 1
                     
                     current_date += timedelta(days=1)
+                
                 # Print min/max values for verification
                 print(f"\nTemporal variation for {spec}:")
                 for band, values in list(min_max_values.items())[:5] + list(min_max_values.items())[-5:]:
@@ -221,6 +226,4 @@ class TemporalProfiler:
                 if 'ds' in locals(): ds = None
                 if 'out_ds' in locals(): out_ds = None
                 
-        print("\n=== Mass Conserved Downscaling with Temporal Disaggregation Completed ===")
-
-##########
+        print("\n=== Temporal Disaggregation Completed ===")
