@@ -131,21 +131,21 @@ def rasterize_line_shp(out_fn, gdf, lyr, bbox, epsg, resolution):
 def prepare_osm_roads(bbox, epsg):
     """Prepare OSM road network with smooth lines"""
     print("Preparing OSM road network...")
-    bbox_4326 = bbox_transform(4326, int(epsg), bbox[0], bbox[1], bbox[2], bbox[3])
-    bbox_polygon = box(*bbox_4326)
-    
-    road_weights = {
-        'motorway': 10.0, 'motorway_link': 8.0,
-        'trunk': 8.0, 'trunk_link': 6.0,
-        'primary': 6.0, 'primary_link': 5.0,
-        'secondary': 4.0, 'secondary_link': 3.0,
-        'tertiary': 2.0, 'tertiary_link': 1.5,
-        'residential': 1.0, 'living_street': 0.8,
-        'service': 0.5, 'track': 0.3,
-        'unclassified': 0.2
-    }
-    
     try:
+        bbox_4326 = bbox_transform(4326, int(epsg), bbox[0], bbox[1], bbox[2], bbox[3])
+        bbox_polygon = box(*bbox_4326)
+        
+        road_weights = {
+            'motorway': 10.0, 'motorway_link': 8.0,
+            'trunk': 8.0, 'trunk_link': 6.0,
+            'primary': 6.0, 'primary_link': 5.0,
+            'secondary': 4.0, 'secondary_link': 3.0,
+            'tertiary': 2.0, 'tertiary_link': 1.5,
+            'residential': 1.0, 'living_street': 0.8,
+            'service': 0.5, 'track': 0.3,
+            'unclassified': 0.2
+        }
+        
         graph = ox.graph_from_polygon(
             bbox_polygon,
             network_type='all',
@@ -169,11 +169,28 @@ def prepare_osm_roads(bbox, epsg):
         gdf_roads = gdf_roads.dissolve(by='weight').reset_index()
         gdf_roads = gdf_roads.to_crs(epsg=int(epsg))
         
+        # Ensure we always return at least one road feature
+        if gdf_roads.empty:
+            # Create a dummy road along the bbox diagonal
+            minx, miny, maxx, maxy = bbox
+            dummy_road = gpd.GeoDataFrame(
+                {'weight': [1.0]},
+                geometry=[LineString([(minx, miny), (maxx, maxy)])],
+                crs=f"EPSG:{epsg}"
+            )
+            return dummy_road
+            
         return gdf_roads[['geometry', 'weight']]
         
     except Exception as e:
         print(f"Error preparing OSM roads: {str(e)}")
-        return gpd.GeoDataFrame(columns=['geometry', 'weight'], crs=f"EPSG:{epsg}")
+        # Fallback to a simple diagonal road
+        minx, miny, maxx, maxy = bbox
+        return gpd.GeoDataFrame(
+            {'weight': [1.0]},
+            geometry=[LineString([(minx, miny), (maxx, maxy)])],
+            crs=f"EPSG:{epsg}"
+        )
 
 def process_urban_atlas(data_parameters, bbox, epsg):
     """Process Urban Atlas land use data without applying weights"""
@@ -225,17 +242,21 @@ def downscaling_proxies(data_parameters, job_parameters, bbox, epsg):
         raise ValueError(f"Invalid EPSG code: {epsg}")
 
     # 1. Process OSM roads
+    # 1. Process OSM roads
     print("\n1. Processing OSM roads...")
     gdf_roads = prepare_osm_roads(bbox, epsg)
     if not gdf_roads.empty:
         rasterize_line_shp('osm_proxy.tif', gdf_roads, 'weight', bbox, epsg, resol)
     else:
+        # Create a properly sized array of ones
         neutral = np.ones((rows, cols), dtype=np.float32)
         driver = gdal.GetDriverByName('GTiff')
         ds = driver.Create('osm_proxy.tif', cols, rows, 1, gdal.GDT_Float32)
         ds.SetGeoTransform((x_min, resol, 0, y_max, 0, -resol))
         ds.SetProjection(f'EPSG:{epsg}')
-        ds.GetRasterBand(1).WriteArray(neutral)
+        band = ds.GetRasterBand(1)
+        band.WriteArray(neutral)
+        band.FlushCache()
         ds = None
 
     # 2. Process Urban Atlas with enhanced classification
