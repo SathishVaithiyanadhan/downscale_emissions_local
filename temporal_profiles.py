@@ -128,6 +128,170 @@ class TemporalProfiler:
         
         return annual_weight, hourly_factors
 
+    def _create_output_files(self, input_fn, base_output_fn, sectors, start_date, end_date, max_bands_per_file=60000):
+        """
+        Create multiple output files to handle the band limit
+        Returns a list of created file paths
+        """
+        # Calculate total bands needed
+        total_days = (end_date - start_date).days + 1
+        bands_per_day = 24 * len(sectors)
+        total_bands = bands_per_day * total_days
+        
+        # Determine how many files we need
+        num_files = (total_bands + max_bands_per_file - 1) // max_bands_per_file
+        bands_per_file = (total_bands + num_files - 1) // num_files
+        
+        # Calculate days per file
+        days_per_file = bands_per_file // bands_per_day
+        if days_per_file < 1:
+            days_per_file = 1
+        
+        print(f"\nSplitting output into {num_files} files with max {bands_per_file} bands each")
+        
+        output_files = []
+        current_date = start_date
+        file_index = 1
+        
+        while current_date <= end_date:
+            file_start_date = current_date
+            file_end_date = current_date + timedelta(days=days_per_file - 1)
+            if file_end_date > end_date:
+                file_end_date = end_date
+            
+            output_fn = f"{base_output_fn[:-4]}_part{file_index:02d}.tif"
+            output_files.append(output_fn)
+            
+            current_date = file_end_date + timedelta(days=1)
+            file_index += 1
+        
+        return output_files, days_per_file
+
+    def _process_temporal_disaggregation(self, input_fn, base_output_fn, sectors, start_date, end_date):
+        """Helper function to perform temporal disaggregation with smart splitting"""
+        try:
+            ds = gdal.Open(input_fn)
+            if ds is None:
+                print(f"Error: Could not open {input_fn}")
+                return False
+                
+            yearly_bands = [ds.GetRasterBand(i).ReadAsArray() for i in range(1, 14)]
+            
+            # Calculate total bands needed
+            total_days = (end_date - start_date).days + 1
+            bands_per_day = 24 * len(sectors)
+            total_bands = bands_per_day * total_days
+            
+            # Determine if we need to split
+            max_bands_per_file = 60000  # Conservative limit
+            needs_split = total_bands > max_bands_per_file
+            
+            if needs_split:
+                print(f"\nTotal bands ({total_bands}) exceeds limit, splitting output")
+                # Calculate how many days we can fit in first file
+                days_in_first_file = max_bands_per_file // bands_per_day
+                if days_in_first_file < 1:
+                    days_in_first_file = 1
+                
+                file_ranges = [
+                    (start_date, start_date + timedelta(days=days_in_first_file - 1)),
+                    (start_date + timedelta(days=days_in_first_file), end_date)
+                ]
+                output_fns = [
+                    base_output_fn,
+                    f"{base_output_fn[:-4]}_part02.tif"
+                ]
+            else:
+                file_ranges = [(start_date, end_date)]
+                output_fns = [base_output_fn]
+            
+            # Track min/max values for verification
+            min_max_values = {}
+
+            for file_idx, (file_start, file_end) in enumerate(file_ranges):
+                output_fn = output_fns[file_idx]
+                file_days = (file_end - file_start).days + 1
+                file_bands = bands_per_day * file_days
+                
+                print(f"\nCreating {output_fn} with {file_bands} bands "
+                      f"({file_start.strftime('%Y-%m-%d')} to {file_end.strftime('%Y-%m-%d')})")
+                
+                # Create the output file
+                driver = gdal.GetDriverByName('GTiff')
+                out_ds = driver.Create(
+                    output_fn,
+                    ds.RasterXSize,
+                    ds.RasterYSize,
+                    file_bands,
+                    gdal.GDT_Float32,
+                    options=['COMPRESS=LZW', 'PREDICTOR=2', 'BIGTIFF=YES', 'NUM_THREADS=ALL_CPUS']
+                )
+                out_ds.SetGeoTransform(ds.GetGeoTransform())
+                out_ds.SetProjection(ds.GetProjection())
+                
+                band_idx = 1
+                current_date = file_start
+                
+                with tqdm(total=file_days, desc=f"Processing {os.path.basename(output_fn)}") as pbar:
+                    while current_date <= file_end:
+                        for sec_idx, sec in enumerate(sectors):
+                            yearly_emis = yearly_bands[sec_idx]
+                            annual_weight, hourly_factors = self._get_time_factors(sec, current_date)
+                            daily_emiss = yearly_emis * annual_weight
+                            
+                            for hour in range(24):
+                                hour_emis = daily_emiss * hourly_factors[hour]
+                                out_ds.GetRasterBand(band_idx).WriteArray(hour_emis)
+                                
+                                hour_str = f"{hour+1:02d}"
+                                out_ds.GetRasterBand(band_idx).SetDescription(
+                                    f"{sec}_h{hour_str}_{current_date.strftime('%Y%m%d')}")
+                                
+                                # Track min/max values
+                                band_desc = f"{sec}_h{hour_str}_{current_date.strftime('%Y%m%d')}"
+                                min_max_values[band_desc] = {
+                                    'min': np.nanmin(hour_emis),
+                                    'max': np.nanmax(hour_emis),
+                                    'mean': np.nanmean(hour_emis)
+                                }
+                                band_idx += 1
+                        
+                        current_date += timedelta(days=1)
+                        pbar.update(1)
+                
+                # Set metadata for this file
+                metadata = {
+                    'temporal_disaggregation': 'EDGAR',
+                    'temporal_status': 'Hourly',
+                    'start_date': file_start.strftime('%Y-%m-%d'),
+                    'end_date': file_end.strftime('%Y-%m-%d'),
+                    'country': self.country,
+                    'profile_year': str(self.profile_year),
+                    'total_days': str(file_days),
+                    'total_bands': str(file_bands),
+                    'band_organization': 'sector_hourly_daily',
+                    'file_part': f"{file_idx + 1} of {len(file_ranges)}" if needs_split else "1 of 1",
+                    'original_filename': os.path.basename(base_output_fn)
+                }
+                out_ds.SetMetadata(metadata)
+                
+                out_ds = None
+                print(f"Successfully created: {output_fn}")
+            
+            # Print min/max values for verification
+            print(f"\nTemporal variation for {os.path.basename(base_output_fn)}:")
+            for band, values in list(min_max_values.items())[:5] + list(min_max_values.items())[-5:]:
+                print(f"{band}: min={values['min']:.9f}, max={values['max']:.9f}, mean={values['mean']:.9f}")
+
+            ds = None
+            return True
+            
+        except Exception as e:
+            print(f"\nError processing {input_fn}: {str(e)}")
+            if 'ds' in locals(): ds = None
+            if 'out_ds' in locals(): out_ds = None
+            return False
+
     def apply_temporal_profiles(self, job_parameters, sectors):
         """Apply temporal profiles to downscaled emissions"""
         print('\n=== Starting Temporal Disaggregation ===')
@@ -139,91 +303,29 @@ class TemporalProfiler:
         main_sectors = [item[0] for item in sectors]
         start_date = datetime.strptime(job_parameters['temporal']['start_date'], "%Y-%m-%d")
         end_date = datetime.strptime(job_parameters['temporal']['end_date'], "%Y-%m-%d")
-        delta = end_date - start_date
         
-        for spec in tqdm(job_parameters['species'], desc="Processing species"):
+        # Calculate total bands needed to warn user
+        total_days = (end_date - start_date).days + 1
+        total_bands = 24 * len(main_sectors) * total_days
+        print(f"\nTotal bands needed: {total_bands} (will be split into multiple files)")
+        
+        # Process all species including NO and NO2 if NOx is present
+        species_to_process = job_parameters['species'].copy()
+        if 'nox' in species_to_process:
+            if 'no' not in species_to_process: species_to_process.append('no')
+            if 'no2' not in species_to_process: species_to_process.append('no2')
+        
+        for spec in tqdm(species_to_process, desc="Processing species"):
+            if spec in ['no', 'no2'] and 'nox' not in job_parameters['species']:
+                continue
+                
             input_fn = os.path.join(job_parameters['job_path'], f'emission_{spec}_yearly.tif')
-            output_fn = os.path.join(job_parameters['job_path'], f'emission_{spec}_temporal.tif')
+            base_output_fn = os.path.join(job_parameters['job_path'], f'emission_{spec}_temporal.tif')
             
             if not os.path.exists(input_fn):
                 print(f"Warning: Input file not found: {input_fn}")
                 continue
+            
+            self._process_temporal_disaggregation(input_fn, base_output_fn, main_sectors, start_date, end_date)
                 
-            try:
-                ds = gdal.Open(input_fn)
-                if ds is None:
-                    print(f"Error: Could not open {input_fn}")
-                    continue
-                    
-                yearly_bands = [ds.GetRasterBand(i).ReadAsArray() for i in range(1, 14)]
-                
-                driver = gdal.GetDriverByName('GTiff')
-                out_ds = driver.Create(
-                    output_fn,
-                    ds.RasterXSize,
-                    ds.RasterYSize,
-                    24 * len(main_sectors) * (delta.days + 1),
-                    gdal.GDT_Float32,
-                    options=['COMPRESS=LZW', 'PREDICTOR=2', 'BIGTIFF=YES']
-                )
-                out_ds.SetGeoTransform(ds.GetGeoTransform())
-                out_ds.SetProjection(ds.GetProjection())
-                
-                band_idx = 1
-                current_date = start_date
-                
-                # Track min/max values for verification
-                min_max_values = {}
-
-                for day in range(delta.days + 1):
-                    for sec_idx, sec in enumerate(main_sectors):
-                        yearly_emis = yearly_bands[sec_idx]
-                        annual_weight, hourly_factors = self._get_time_factors(sec, current_date)
-                        daily_emiss = yearly_emis * annual_weight
-                        
-                        for hour in range(24):
-                            hour_emis = daily_emiss * hourly_factors[hour]
-                            out_ds.GetRasterBand(band_idx).WriteArray(hour_emis)
-                            
-                            # MODIFIED SECTION: Add leading zero to hours 1-9
-                            hour_str = f"{hour+1:02d}"  # This formats 1 as '01', 9 as '09', 10 as '10'
-                            out_ds.GetRasterBand(band_idx).SetDescription(
-                                f"{sec}_h{hour_str}_{current_date.strftime('%Y%m%d')}")
-                            
-                            # Track min/max values
-                            band_desc = f"{sec}_h{hour_str}_{current_date.strftime('%Y%m%d')}"
-                            min_max_values[band_desc] = {
-                                'min': np.nanmin(hour_emis),
-                                'max': np.nanmax(hour_emis),
-                                'mean': np.nanmean(hour_emis)
-                            }
-                            band_idx += 1
-                    
-                    current_date += timedelta(days=1)
-                
-                # Print min/max values for verification
-                print(f"\nTemporal variation for {spec}:")
-                for band, values in list(min_max_values.items())[:5] + list(min_max_values.items())[-5:]:
-                    print(f"{band}: min={values['min']:.9f}, max={values['max']:.9f}, mean={values['mean']:.9f}")
-
-                metadata = {
-                    'temporal_disaggregation': 'EDGAR',
-                    'temporal_status': 'Hourly',
-                    'start_date': start_date.strftime('%Y-%m-%d'),
-                    'end_date': end_date.strftime('%Y-%m-%d'),
-                    'country': self.country,
-                    'profile_year': str(self.profile_year),
-                    'total_days': str(delta.days + 1)
-                }
-                out_ds.SetMetadata(metadata)
-                
-                ds = None
-                out_ds = None
-                print(f"\nSuccessfully created: {output_fn}")
-                
-            except Exception as e:
-                print(f"\nError processing {spec}: {str(e)}")
-                if 'ds' in locals(): ds = None
-                if 'out_ds' in locals(): out_ds = None
-                
-        print("\n=== Temporal Disaggregation Completed ===")
+        print("\n=== Mass Conserved downscaling of GRETA emissions with Temporal Disaggregation Completed ===")
