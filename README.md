@@ -2,7 +2,7 @@
 
 
 ## Description
-This code repository downscales a gridded emission inventory using surface characteristics such as land cover types, population density and street types. The tool integrates multiple data sources and applies sector-specific downscaling approaches to create temporally-resolved emission fields suitable for urban air quality modeling. The sector specific emissions are downscaled using a similar method as used in the [UrbEm Hybrid Method to Derive High-Resolution Emissions for City-Scale Air Quality Modeling](https://www.mdpi.com/2073-4433/12/11/1404).
+This code repository downscales a gridded emission inventory using surface characteristics such as land cover types, population density and street types. The tool integrates multiple data sources and applies sector-specific downscaling approaches to create temporally-resolved emission fields suitable for urban air quality modeling. The sector specific emissions are downscaled using a similar method as used in the [UrbEm Hybrid Method to Derive High-Resolution Emissions for City-Scale Air Quality Modeling](https://www.mdpi.com/2073-4433/12/11/1404). Additionally, we includded very high resolution downscaling using the spatial proxies, temporal disaggregation of emissions, NOx speciation to NO and NO2, effective handling of output big Geotif's which has more than 60000 band limits, etc.,
 
 ## Key features:
 
@@ -12,7 +12,9 @@ This code repository downscales a gridded emission inventory using surface chara
 
 3. Support for multiple pollutants (PM2.5, NOx, SO2, etc.)
 
-4. Output in GeoTIFF format
+4. Automatic speciation of NOx to NO and NO2, if the species in the config file has nox. 
+
+5. Output in GeoTIFF format with effective big geotiff output handling for outputs with more than 60000 bands. 
 
 
 ## The tool consists of seven main components:
@@ -102,4 +104,5 @@ For open source projects, say how it is licensed.
 
 ## TO-DO
 * Add checks to verify input parameter in configuration file.
+* Add other emission speciations. 
 * Add aerosol size distribution
