@@ -60,7 +60,7 @@ The following data is required to downscale a emission inventory using this tool
 6. emission_time_factors.xlsx 
     * The XLSX file that connects GRETA sectors with teh EDGAR sectors. (Save this file in the EDGAR folder together with the EDGAR temporal profiles, the file is in the repo for your refernce.)
 7. PM Speciation profiles from CAMS-REG-v6
-    * To split the PM emisssion.
+    * To split the PM emission.
 	* Format: Excel sheet (.xlsx)
 	* Available upon request to TNO.
 
@@ -77,7 +77,8 @@ The following data is required to downscale a emission inventory using this tool
 | emiss_dir  | Path to GRETA Geodatabase or TNO files. |
 | corine_dir | Path to CORINE Geodatabase. |
 | popul_dir  | Path to population density raster. |
-| edagr_dir  | Path to EDGAR temporal profile. |
+| edgar_dir  | Path to EDGAR temporal profile. |
+| pm_speciation_file  | Path to PM speciation file. |
 | **job_settings** | | 
 | job_path | Path to simulation data. |
 | job_name | Simulation name. |
@@ -96,6 +97,9 @@ The following data is required to downscale a emission inventory using this tool
 | end_date | Specify the ending date for temporal disaggregation |
 | country | Edgar's country code |
 | profile_year | Specify the year of the emissions |
+| **pm_speciation** | |
+| country_code | Specify the country code |
+| year | Specify the year |
 
 ## Authors and acknowledgment
 Show your appreciation to those who have contributed to the project.
