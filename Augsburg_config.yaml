@@ -5,15 +5,20 @@ data_settings:
   urbanAtlas_dir: /home/vaithisa/Input_data/LU_Urban_Atlas/Landuse_Urban_Atlas_LargerArea/UrbanAtlasBBox.gdb
   popul_dir: /home/vaithisa/Input_data/GHS_POP_E2020_GLOBE_R2023A_54009_100_V1_0_R4_C19/GHS_POP_E2020_GLOBE_R2023A_54009_100_V1_0_R4_C19.tif
   edgar_dir: /home/vaithisa/Input_data/EDGAR
+  pm_speciation_file: /home/vaithisa/Input_data/PM_Speciation_CAMS_REG/CAMS-REG-v6_PM_split.xlsx             #PM_speciation_DEU.xlsx
 
 # Simulation parameters
 job_settings:
-  job_path: /home/vaithisa/Downscale_Emissions/Small_area_Emissions_Yearly  #/mnt/c/Users/vaithisa/PHD_Augsburg/6months
+  job_path: /home/vaithisa/Downscale_Emissions/Downscale_with_pm          #Small_area_Emissions_Yearly  #/mnt/c/Users/vaithisa/PHD_Augsburg/6months
   job_name: test
   min_lon: 639800  #small_domain
   max_lon: 640800
   min_lat: 5358200
   max_lat: 5359200
+  #min_lon: 634000  #Augsburg_full_doamin
+  #max_lon: 649000
+  #min_lat: 5345000
+  #max_lat: 5373000
   resol: 10
   epsg_code: 25832
   #species: [pm2_5]
@@ -25,4 +30,8 @@ job_settings:
     start_date: "2025-02-03"  # Start date for temporal profiles
     end_date: "2025-02-03" 
     country: "DEU"  # Added country code
-    profile_year: 2017  # Year for temporal profiles           
+    profile_year: 2017  # Year for temporal profiles
+  pm_speciation:
+    country_code: "DEU"
+    year: 2018
+#######         

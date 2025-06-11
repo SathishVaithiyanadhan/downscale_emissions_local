@@ -307,16 +307,30 @@ class TemporalProfiler:
         # Calculate total bands needed to warn user
         total_days = (end_date - start_date).days + 1
         total_bands = 24 * len(main_sectors) * total_days
-        print(f"\nTotal bands needed: {total_bands} (will be split into multiple files)")
+        print(f"\nTotal bands needed: {total_bands} (will be split into multiple files if needed)")
         
-        # Process all species including NO and NO2 if NOx is present
+        # Process all species including NO/NO2 if NOx is present and PM components if PM2.5 is present
         species_to_process = job_parameters['species'].copy()
+        
+        # Add NO and NO2 if NOx is present
         if 'nox' in species_to_process:
             if 'no' not in species_to_process: species_to_process.append('no')
             if 'no2' not in species_to_process: species_to_process.append('no2')
         
+        # Add PM2.5 components if PM2.5 is present
+        if 'pm2_5' in species_to_process:
+            pm_components = ['EC', 'OC', 'SO4', 'Na', 'OthMin']
+            for comp in pm_components:
+                if comp.lower() not in species_to_process:
+                    species_to_process.append(comp.lower())
+        
         for spec in tqdm(species_to_process, desc="Processing species"):
+            # Skip if this is NO/NO2 but we don't have NOx file
             if spec in ['no', 'no2'] and 'nox' not in job_parameters['species']:
+                continue
+                
+            # Skip if this is a PM component but we don't have PM2.5 file
+            if spec in ['EC', 'OC', 'SO4', 'Na', 'OthMin'] and 'pm2_5' not in job_parameters['species']:
                 continue
                 
             input_fn = os.path.join(job_parameters['job_path'], f'emission_{spec}_yearly.tif')
