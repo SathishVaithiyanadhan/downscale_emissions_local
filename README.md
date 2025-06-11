@@ -2,7 +2,7 @@
 
 
 ## Description
-This code repository downscales a gridded emission inventory using surface characteristics such as land cover types, population density and street types. The tool integrates multiple data sources and applies sector-specific downscaling approaches to create temporally-resolved emission fields suitable for urban air quality modeling. The sector specific emissions are downscaled using a similar method as used in the [UrbEm Hybrid Method to Derive High-Resolution Emissions for City-Scale Air Quality Modeling](https://www.mdpi.com/2073-4433/12/11/1404). Additionally, we includded very high resolution downscaling using the spatial proxies, temporal disaggregation of emissions, NOx speciation to NO and NO2, effective handling of output big Geotif's which has more than 60000 band limits, etc.,
+This code repository downscales a gridded emission inventory using surface characteristics such as land cover types, population density and street types. The tool integrates multiple data sources and applies sector-specific downscaling approaches to create temporally-resolved emission fields suitable for urban air quality modeling. The sector specific emissions are downscaled using a similar method as used in the [UrbEm Hybrid Method to Derive High-Resolution Emissions for City-Scale Air Quality Modeling](https://www.mdpi.com/2073-4433/12/11/1404). Additionally, we includded very high resolution downscaling using the spatial proxies, temporal disaggregation of emissions, NOx speciation to NO and NO2, PM speciation, effective handling of output big Geotif's which has more than 60000 band limits, etc.,
 
 ## Key features:
 
@@ -13,6 +13,8 @@ This code repository downscales a gridded emission inventory using surface chara
 3. Support for multiple pollutants (PM2.5, NOx, SO2, etc.)
 
 4. Automatic speciation of NOx to NO and NO2, if the species in the config file has nox. 
+
+5. Speciation on PM2.5 to fine EC, OC, SO4, Na, OthMin (Other Minerals) using the CAMS-REG-v6 profiles from TNO.
 
 5. Output in GeoTIFF format with effective big geotiff output handling for outputs with more than 60000 bands. 
 
@@ -25,7 +27,7 @@ This code repository downscales a gridded emission inventory using surface chara
 
 3. Emission processing (emission_tools.py) - Core downscaling algorithms
 
-4. The mass balance evaluation (mass_balance_tools.py) - Ensures the mass balance in the downscaled emissions wrt the Emission inventory.
+4. The mass balance evaluation (mass_balance_tools.py) - Ensures the mass balance in the downscaled emissions wrt the Emission inventory and perfroms speciation of NOx and PM2.5.
 
 5. The Temporal disaggregation of emissions (temporal_profiles.py) - Applies the Edgar's temporal profiles to the yearly downscaled emissions for the high temporal resolution of emissions (yearly -> hourly)
 
@@ -57,6 +59,10 @@ The following data is required to downscale a emission inventory using this tool
 	* Retrieved using the OSMnx API
 6. emission_time_factors.xlsx 
     * The XLSX file that connects GRETA sectors with teh EDGAR sectors. (Save this file in the EDGAR folder together with the EDGAR temporal profiles, the file is in the repo for your refernce.)
+7. PM Speciation profiles from CAMS-REG-v6
+    * To split the PM emisssion.
+	* Format: Excel sheet (.xlsx)
+	* Available upon request to TNO.
 
 ## Usage
 * Use `downscale_greta_env.yaml` file to install all the required dependencies.
