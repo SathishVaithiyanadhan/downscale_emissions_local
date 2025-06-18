@@ -318,7 +318,7 @@ class TemporalProfiler:
             if 'no2' not in species_to_process: species_to_process.append('no2')
         
         # Add PM2.5 components if PM2.5 is present
-        if 'pm2_5' in species_to_process:
+        if 'pm2_5' in species_to_process and 'pm10' in species_to_process:
             pm_components = ['EC', 'OC', 'SO4', 'Na', 'OthMin']
             for comp in pm_components:
                 if comp.lower() not in species_to_process:

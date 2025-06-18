@@ -1,3 +1,4 @@
+#with NOx and PM (fine+coarse) speciation
 import numpy as np
 from osgeo import gdal
 import geopandas as gpd
@@ -9,6 +10,7 @@ import pandas as pd
 import rasterio
 import time
 from pathlib import Path
+import tempfile
 
 def process_species(args):
     """Parallel processing function for each species"""
@@ -195,191 +197,192 @@ def process_yearly_emissions(input_path, output_no_path, output_no2_path):
     print(f"Annual NO emissions saved to: {output_no_path}")
     print(f"Annual NO₂ emissions saved to: {output_no2_path}")
 
-
-def speciate_pm25(input_path, output_dir, pm_speciation_file, country_code, year):
+def process_pm_speciation(pm10_path, pm2_5_path, speciation_file, country_code, year, output_dir):
     """
-    Process PM2.5 emissions by speciating them according to sector-specific profiles.
-    
-    Args:
-        input_path (str): Path to input PM2.5 GeoTIFF file
-        output_dir (str): Directory to save speciated outputs
-        pm_speciation_file (str): Path to Excel file with speciation profiles
-        country_code (str): Country code to use (default 'DEU')
-        year (int): Year to use (default 2018)
+    Full PM processing pipeline:
+    1. Speciate PM2.5 (fine)
+    2. Calculate PM coarse (PM10 - PM2.5) and speciate
+    3. Combine fine and coarse species
     """
     start_time = time.time()
-    
-    # Create output directory if it doesn't exist
     Path(output_dir).mkdir(parents=True, exist_ok=True)
     
     # Load PM speciation profiles from Excel
     try:
-        pm_species = pd.read_excel(pm_speciation_file, sheet_name='fine')
+        # Load fine and coarse profiles
+        pm_fine = pd.read_excel(speciation_file, sheet_name='fine')
+        pm_coarse = pd.read_excel(speciation_file, sheet_name='coarse')
         
         # Filter for the specific country and year
-        pm_species = pm_species[(pm_species['ISO3'] == country_code) & 
-                                (pm_species['Year'] == year)]
+        pm_fine = pm_fine[(pm_fine['ISO3'] == country_code) & (pm_fine['Year'] == year)]
+        pm_coarse = pm_coarse[(pm_coarse['ISO3'] == country_code) & (pm_coarse['Year'] == year)]
         
-        if pm_species.empty:
+        if pm_fine.empty or pm_coarse.empty:
             raise ValueError(f"No data found for country {country_code} and year {year}")
         
-        # Verify we have the expected columns
-        required_columns = ['Year', 'ISO3', 'GNFR_Sector', 'EC_fine', 'OC_fine', 
-                          'SO4_fine', 'Na_fine', 'OthMin_fine']
-        if not all(col in pm_species.columns for col in required_columns):
-            raise ValueError("Excel file doesn't contain expected columns")
+        # Get species names and columns
+        fine_species_cols = ['EC_fine', 'OC_fine', 'SO4_fine', 'Na_fine', 'OthMin_fine']
+        fine_species_names = ['ec', 'oc', 'so4', 'na', 'othmin']
+        coarse_species_cols = ['EC_coarse', 'OC_coarse', 'SO4_coarse', 'Na_coarse', 'OthMin_coarse']
+        
+        # Sector mapping between input bands and GNFR sectors
+        gnfr_band_mapping = {
+            1: 'A', 2: 'B', 3: 'C', 4: 'D', 5: 'E', 6: 'F',
+            7: 'G', 8: 'H', 9: 'I', 10: 'J', 11: 'K', 12: 'L'
+        }
+        
+        # Open input files
+        with rasterio.open(pm2_5_path) as src_pm25, rasterio.open(pm10_path) as src_pm10:
+            # Validate inputs
+            if src_pm25.count != 13 or src_pm10.count != 13:
+                raise ValueError("Inputs must have 13 bands")
+            if src_pm25.shape != src_pm10.shape:
+                raise ValueError("Raster dimensions don't match")
             
-        # Get list of all species (from column names)
-        species_columns = ['EC_fine', 'OC_fine', 'SO4_fine', 'Na_fine', 'OthMin_fine']
-        species_names = ['ec', 'oc', 'so4', 'na', 'othmin']  # Simplified names
-        print(f"Found {len(species_names)} PM2.5 species in speciation profile")
-        
-        # Calculate average fractions for road transport (F) sector
-        # We'll use these as the default when processing the F band
-        road_fractions = {}
-        for species_col in species_columns:
-            # Get fractions for all road subsectors (F1-F4)
-            f_fractions = pm_species[pm_species['GNFR_Sector'].str.startswith('F')][species_col]
-            # Calculate weighted average (weighted by typical emission distribution)
-            road_fractions[species_col] = np.average(f_fractions)
-        
-        print("\nRoad transport sector average fractions:")
-        for species, fraction in zip(species_names, road_fractions.values()):
-            print(f"  {species}: {fraction:.4f}")
+            profile = src_pm25.profile
+            profile.update(dtype=rasterio.float32, nodata=-9999.0, compress='deflate')
             
-    except Exception as e:
-        print(f"Error loading speciation profiles: {str(e)}")
-        raise
-    
-    # Define sector mapping between input bands and GNFR sectors
-    # This maps the band order in the input GeoTIFF to GNFR sectors
-    gnfr_band_mapping = {
-        1: 'A',  # Public Power
-        2: 'B',  # Industry
-        3: 'C',  # Other Stationary Comb
-        4: 'D',  # Fugitives
-        5: 'E',  # Solvents
-        6: 'F',  # Road Transport (will use average of F1-F4)
-        7: 'G',  # Shipping
-        8: 'H',  # Aviation
-        9: 'I',  # Off-road
-        10: 'J', # Waste
-        11: 'K', # Agri Livestock
-        12: 'L'  # Agri Other
-    }
-    
-    # Open input PM2.5 file
-    with rasterio.open(input_path) as src:
-        # Verify we have the expected number of bands (12 sectors + SumAllSectors)
-        if src.count != 13:
-            raise ValueError(f"Expected 13 bands in input file (12 sectors + SumAllSectors), found {src.count}")
-        
-        # Get the profile for output files
-        profile = src.profile
-        profile.update(
-            dtype=rasterio.float32,
-            count=src.count,  # Same number of bands (13)
-            nodata=src.nodata if src.nodata is not None else -9999.0,
-            compress='deflate'
-        )
-        
-        # Get band descriptions from input
-        band_descriptions = src.descriptions if src.descriptions else [f"Band_{i}" for i in range(1, 14)]
-        
-        # Process each species
-        for species_col, species_name in zip(species_columns, species_names):
-            output_path = os.path.join(output_dir, f"emission_{species_name}_yearly.tif")
-            print(f"\nProcessing species: {species_name}")
-            
-            try:
-                with rasterio.open(output_path, 'w', **profile) as dst:
-                    # Copy metadata from input
-                    dst.update_tags(**src.tags())
+            # Create temporary directory for intermediate files
+            with tempfile.TemporaryDirectory() as temp_dir:
+                # STEP 1: Speciate PM2.5 (fine)
+                fine_species_data = {}
+                
+                for species_col, species_name in zip(fine_species_cols, fine_species_names):
+                    # Initialize arrays for this species
+                    fine_bands = []
+                    fine_total = np.zeros(src_pm25.shape, dtype=np.float32)
                     
-                    # Initialize sum for recalculating SumAllSectors
-                    sum_all = np.zeros(src.shape, dtype=np.float32)
-                    
-                    # Process each sector band (bands 1-12)
+                    # Process each sector band
                     for band_idx in range(1, 13):  # Only process first 12 bands
-                        # Get the GNFR sector for this band
                         sector_code = gnfr_band_mapping[band_idx]
                         
-                        # Read the PM2.5 emissions for this sector
-                        pm25 = src.read(band_idx)
+                        # Get PM2.5 emissions for this sector
+                        pm25 = src_pm25.read(band_idx).astype(np.float32)
                         
+                        # Get speciation fraction
                         if sector_code == 'F':
-                            # For road transport, use the average fractions
-                            fraction = road_fractions[species_col]
+                            # For road transport, use average of F1-F4
+                            f_fractions = pm_fine[pm_fine['GNFR_Sector'].str.startswith('F')][species_col]
+                            fraction = np.average(f_fractions)
                         else:
-                            # For non-road sectors
-                            fraction = pm_species.loc[
-                                pm_species['GNFR_Sector'] == sector_code,
-                                species_col
+                            fraction = pm_fine.loc[
+                                pm_fine['GNFR_Sector'] == sector_code, species_col
                             ].values[0]
                         
                         # Calculate species emissions
-                        species_emissions = pm25 * fraction
+                        species_emissions = np.where(
+                            pm25 == src_pm25.nodata,
+                            src_pm25.nodata,
+                            pm25 * fraction
+                        ).astype(np.float32)
                         
-                        # Write to output
-                        dst.write(species_emissions, band_idx)
-                        dst.set_band_description(band_idx, band_descriptions[band_idx-1])
+                        fine_bands.append(species_emissions)
                         
-                        # Add to total sum
-                        sum_all += species_emissions
+                        # Accumulate for total band (skip nodata values)
+                        valid_mask = species_emissions != src_pm25.nodata
+                        fine_total[valid_mask] += species_emissions[valid_mask]
                     
-                    # Write the recalculated SumAllSectors band (band 13)
-                    dst.write(sum_all, 13)
-                    dst.set_band_description(13, band_descriptions[12])  # Keep original description
+                    fine_species_data[species_name] = {
+                        'bands': fine_bands,
+                        'total': fine_total
+                    }
+                
+                # STEP 2: Calculate PM coarse and speciate
+                coarse_species_data = {}
+                
+                for species_col in coarse_species_cols:
+                    species_name = species_col.split('_')[0].lower()
                     
-                    print(f"Saved: {output_path}")
-            
-            except Exception as e:
-                print(f"Error processing {species_name}: {str(e)}")
-                if os.path.exists(output_path):
-                    os.remove(output_path)
-                raise
+                    # Initialize arrays for this species
+                    coarse_bands = []
+                    coarse_total = np.zeros(src_pm10.shape, dtype=np.float32)
+                    
+                    # Process each sector band
+                    for band_idx in range(1, 13):
+                        sector_code = gnfr_band_mapping[band_idx]
+                        
+                        # Calculate coarse PM (PM10 - PM2.5)
+                        pm10 = src_pm10.read(band_idx).astype(np.float32)
+                        pm25 = src_pm25.read(band_idx).astype(np.float32)
+                        coarse = np.where(
+                            (pm10 == src_pm10.nodata) | (pm25 == src_pm25.nodata),
+                            src_pm10.nodata,
+                            pm10 - pm25
+                        ).astype(np.float32)
+                        
+                        # Get speciation fraction
+                        if sector_code == 'F':
+                            # For road transport, use average of F1-F4
+                            f_fractions = pm_coarse[pm_coarse['GNFR_Sector'].str.startswith('F')][species_col]
+                            fraction = np.average(f_fractions)
+                        else:
+                            fraction = pm_coarse.loc[
+                                pm_coarse['GNFR_Sector'] == sector_code, species_col
+                            ].values[0]
+                        
+                        # Calculate species emissions
+                        species_emissions = np.where(
+                            coarse == src_pm10.nodata,
+                            src_pm10.nodata,
+                            coarse * fraction
+                        ).astype(np.float32)
+                        
+                        coarse_bands.append(species_emissions)
+                        
+                        # Accumulate for total band
+                        valid_mask = species_emissions != src_pm10.nodata
+                        coarse_total[valid_mask] += species_emissions[valid_mask]
+                    
+                    coarse_species_data[species_name] = {
+                        'bands': coarse_bands,
+                        'total': coarse_total
+                    }
+                
+                # STEP 3: Combine fine and coarse species
+                for species_name in fine_species_names:
+                    if species_name in coarse_species_data:
+                        output_path = os.path.join(output_dir, f"emission_{species_name}_yearly.tif")
+                        
+                        with rasterio.open(output_path, 'w', **profile) as dst:
+                            # Process each sector band
+                            for band_idx in range(12):
+                                # Get fine and coarse emissions for this band
+                                fine_emissions = fine_species_data[species_name]['bands'][band_idx]
+                                coarse_emissions = coarse_species_data[species_name]['bands'][band_idx]
+                                
+                                # Combine them
+                                combined = np.where(
+                                    (fine_emissions == src_pm25.nodata) | (coarse_emissions == src_pm10.nodata),
+                                    profile['nodata'],
+                                    fine_emissions + coarse_emissions
+                                ).astype(np.float32)
+                                
+                                dst.write(combined, band_idx + 1)
+                            
+                            # Write total band (combined fine + coarse totals)
+                            fine_total = fine_species_data[species_name]['total']
+                            coarse_total = coarse_species_data[species_name]['total']
+                            combined_total = np.where(
+                                (fine_total == src_pm25.nodata) | (coarse_total == src_pm10.nodata),
+                                profile['nodata'],
+                                fine_total + coarse_total
+                            ).astype(np.float32)
+                            
+                            dst.write(combined_total, 13)
+                            
+                            # Set band descriptions from original file
+                            if src_pm25.descriptions:
+                                for i in range(13):
+                                    dst.set_band_description(i + 1, src_pm25.descriptions[i])
+                            
+                            print(f"Saved combined {species_name} emissions to {output_path}")
     
-    # Verification of mass conservation
-    verify_mass_conservation(input_path, output_dir, species_names)
+    except Exception as e:
+        print(f"Error in PM speciation: {str(e)}")
+        raise
     
-    print(f"\nPM2.5 speciation completed in {time.time()-start_time:.2f} seconds")
+    print(f"\nPM speciation completed in {time.time()-start_time:.2f} seconds")
     print(f"Output files saved to: {output_dir}")
-
-def verify_mass_conservation(input_path, output_dir, species_names):
-    """Verify that the sum of speciated emissions equals the original PM2.5"""
-    print("\nVerifying mass conservation...")
-    
-    with rasterio.open(input_path) as src:
-        original_total = src.read(13)  # SumAllSectors band
-        
-        # Initialize sum of all species
-        species_sum = np.zeros(original_total.shape, dtype=np.float32)
-        
-        # Sum all species files
-        for species in species_names:
-            species_path = os.path.join(output_dir, f"emission_{species}_yearly.tif")
-            with rasterio.open(species_path) as species_src:
-                species_sum += species_src.read(13)  # SumAllSectors band for this species
-        
-        # Calculate differences
-        diff = np.abs(original_total - species_sum)
-        max_diff = np.max(diff)
-        mean_diff = np.mean(diff)
-        
-        # Find where differences exceed 1%
-        threshold = original_total * 0.01
-        large_diff_count = np.sum(diff > threshold)
-        total_pixels = original_total.size
-        
-        print(f"Mass conservation results:")
-        print(f"  Maximum difference: {max_diff:.6f}")
-        print(f"  Mean difference: {mean_diff:.6f}")
-        print(f"  Pixels with >1% difference: {large_diff_count}/{total_pixels} ({large_diff_count/total_pixels:.2%})")
-        
-        if max_diff > 0.01:  # Absolute tolerance
-            print("Warning: Significant differences detected in mass conservation")
-        else:
-            print("Mass conservation verified successfully")
 
 def calculate_mass_balance(job_parameters, data_parameters, sectors, species):
     """Parallel mass balance calculation"""
@@ -451,22 +454,29 @@ def calculate_mass_balance(job_parameters, data_parameters, sectors, species):
         else:
             print(f"Warning: Mass-balanced NOx file not found: {nox_path}")
 
-    # Perform PM2.5 speciation if needed
-    if 'pm2_5' in species:
-        print("\n=== Starting PM2.5 Speciation ===")
+    # Perform PM speciation if both PM10 and PM2.5 are present
+    if 'pm10' in species and 'pm2_5' in species:
+        print("\n=== Starting PM Speciation ===")
+        pm10_path = os.path.join(job_parameters['job_path'], 'emission_pm10_yearly.tif')
         pm25_path = os.path.join(job_parameters['job_path'], 'emission_pm2_5_yearly.tif')
         
-        if os.path.exists(pm25_path):
+        if os.path.exists(pm10_path) and os.path.exists(pm25_path):
             try:
-                speciate_pm25(
-                    input_path=pm25_path,
-                    output_dir=job_parameters['job_path'],
-                    pm_speciation_file=data_parameters['pm_speciation_file'],
+                process_pm_speciation(
+                    pm10_path=pm10_path,
+                    pm2_5_path=pm25_path,
+                    speciation_file=data_parameters['pm_speciation_file'],
                     country_code=job_parameters['pm_speciation']['country_code'],
-                    year=job_parameters['pm_speciation']['year']
+                    year=job_parameters['pm_speciation']['year'],
+                    output_dir=job_parameters['job_path']
                 )
-                print("PM2.5 speciation completed successfully.")
+                print("PM speciation completed successfully.")
             except Exception as e:
-                print(f"Error during PM2.5 speciation: {str(e)}")
+                print(f"Error during PM speciation: {str(e)}")
         else:
-            print(f"Warning: Mass-balanced PM2.5 file not found: {pm25_path}")
+            missing = []
+            if not os.path.exists(pm10_path):
+                missing.append('pm10')
+            if not os.path.exists(pm25_path):
+                missing.append('pm2_5')
+            print(f"Warning: Mass-balanced PM files not found: {', '.join(missing)}")
