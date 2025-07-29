@@ -1,3 +1,4 @@
+#with temporal extra files:
 import os
 import yaml
 import sys
@@ -36,7 +37,10 @@ def config_parameters():
             'weekend_types': 'auxiliary_tables/weekenddays.csv',
             'daytype_mapping': 'auxiliary_tables/weekdays.csv',
             'edgar_monthly': 'EDGAR_temporal_profiles_r1.xlsx',
-            'greta_to_edgar': 'emission_time_factors.xlsx'
+            'greta_to_edgar': 'emission_time_factors.xlsx',
+            'timezones': 'auxiliary_tables/timezones_definition.csv',
+            'lat_lon_tz': 'auxiliary_tables/lat_lon_TZ_id.csv',
+            'dst_times': 'auxiliary_tables/daylite_saving_times.csv'
         }
 
         for key, rel_path in required_temporal_files.items():

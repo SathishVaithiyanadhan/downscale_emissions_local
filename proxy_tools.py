@@ -1,3 +1,5 @@
+
+#####
 """
 Proxy Tools for Emission Downscaling
 - Enhanced OSM road processing (smooth continuous lines)
@@ -293,3 +295,4 @@ def downscaling_proxies(data_parameters, job_parameters, bbox, epsg):
         raise RuntimeError(f"Population processing failed: {str(e)}")
 
     print("\n=== Proxy preparation completed ===")
+###########

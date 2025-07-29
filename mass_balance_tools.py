@@ -92,10 +92,10 @@ def process_species(args):
         return None
 
 def process_yearly_emissions(input_path, output_no_path, output_no2_path):
-    """Process yearly multi-sector NOx emissions to calculate NO and NO₂ emissions."""
+    """Process yearly multi-sector NOx emissions to calculate NO and NO2 emissions."""
     start_time = time.time()
     
-    # Define sector names (excluding 'SumAllSectors' for processing)
+    # Define sector names
     all_sector_names = [
         'A_PublicPower', 'B_Industry', 'C_OtherStationaryComb', 'D_Fugitives',
         'E_Solvents', 'F_RoadTransport', 'G_Shipping', 'H_Aviation',
@@ -104,17 +104,23 @@ def process_yearly_emissions(input_path, output_no_path, output_no2_path):
     processing_sectors = all_sector_names[:-1]  # Exclude 'SumAllSectors'
     
     def get_no2_fraction(sector):
-        """Returns annual average NO₂ fraction of NOx for given sector."""
+        """Returns annual average NO2 fraction of NOx for given sector."""
         if sector == 'F_RoadTransport':
-            return 0.20  # Annual average for road transport
+            return 0.25  # Annual average for road transport
         elif sector in ['G_Shipping', 'H_Aviation']:
-            return 0.20  # Shipping and aviation
+            return 0.10  # Shipping and aviation
         elif sector == 'I_OffRoad':
             return 0.15  # Off-road mobile
         elif sector in ['A_PublicPower', 'B_Industry', 'C_OtherStationaryComb']:
             return 0.08  # Stationary combustion
+        elif sector == 'D_Fugitives':
+            return 0.20  # Fugitives
+        elif sector == 'L_AgriOther':
+            return 0.20  # Biomass burning
+        elif sector == 'J_Waste':
+            return 0.10  # Incineration
         else:
-            return 0.0   # Other sectors (negligible NO₂)
+            return 0.0   # Other sectors (negligible NO2)
 
     with rasterio.open(input_path) as src:
         total_bands = src.count
@@ -123,7 +129,7 @@ def process_yearly_emissions(input_path, output_no_path, output_no2_path):
         
         print(f"Processing yearly data with {len(all_sector_names)} sectors")
         
-        # Get optimal block size (multiple of 16)
+        # Get optimal block size
         blockxsize = min(256, src.width // 16 * 16)
         blockysize = min(256, src.height // 16 * 16)
         
@@ -142,19 +148,30 @@ def process_yearly_emissions(input_path, output_no_path, output_no2_path):
             with rasterio.open(output_no_path, 'w', **profile) as no_dst, \
                  rasterio.open(output_no2_path, 'w', **profile) as no2_dst:
                 
-                # Copy all metadata including band descriptions
+                # Copy metadata
                 no_dst.update_tags(**src.tags())
                 no2_dst.update_tags(**src.tags())
                 
-                # Initialize arrays for totals
-                annual_total_no = np.zeros(src.shape, dtype=np.float32)
-                annual_total_no2 = np.zeros(src.shape, dtype=np.float32)
+                # Initialize arrays for sector sums
+                sector_no_sums = {}
+                sector_no2_sums = {}
+                sector_nox_masses = {}
                 
-                # Process each sector (excluding 'SumAllSectors')
+                # Calculate total NOx masses for each sector to compute weighted NO2 fraction
+                pixel_area = abs(src.transform[0] * src.transform[4])
+                total_nox_mass = 0.0
+                weighted_no2_fraction_sum = 0.0
+                
+                # Process each sector
                 for sector_idx, sector in enumerate(processing_sectors):
                     nox = src.read(sector_idx + 1)
                     
-                    # Split NOx into NO and NO₂ using annual fractions
+                    # Calculate sector NOx mass
+                    sector_nox_mass = np.nansum(nox) * pixel_area
+                    sector_nox_masses[sector] = sector_nox_mass
+                    total_nox_mass += sector_nox_mass
+                    
+                    # Split NOx into NO and NO2
                     no2_frac = get_no2_fraction(sector)
                     no = nox * (1 - no2_frac)
                     no2 = nox * no2_frac
@@ -163,19 +180,32 @@ def process_yearly_emissions(input_path, output_no_path, output_no2_path):
                     no_dst.write(no, sector_idx + 1)
                     no2_dst.write(no2, sector_idx + 1)
                     
+                    # Store sector sums for verification
+                    sector_no_sums[sector] = np.nansum(no)
+                    sector_no2_sums[sector] = np.nansum(no2)
+                    
+                    # Contribute to weighted NO2 fraction
+                    weighted_no2_fraction_sum += sector_nox_mass * no2_frac
+                    
                     # Set band descriptions
                     band_desc = src.descriptions[sector_idx]
                     no_dst.set_band_description(sector_idx + 1, band_desc)
                     no2_dst.set_band_description(sector_idx + 1, band_desc)
-                    
-                    # Accumulate for total calculation
-                    annual_total_no += no
-                    annual_total_no2 += no2
                 
-                # Write recalculated totals (ignore input value)
+                # Calculate weighted average NO2 fraction for SumAllSectors
+                avg_no2_fraction = weighted_no2_fraction_sum / total_nox_mass if total_nox_mass > 0 else 0.0
+                
+                # Read SumAllSectors band from input NOx
+                sum_all_nox = src.read(len(processing_sectors) + 1)
+                
+                # Split SumAllSectors into NO and NO2 using weighted average fraction
+                sum_all_no = sum_all_nox * (1 - avg_no2_fraction)
+                sum_all_no2 = sum_all_nox * avg_no2_fraction
+                
+                # Write SumAllSectors bands (band 13)
                 total_band_idx = len(processing_sectors)
-                no_dst.write(annual_total_no, total_band_idx + 1)
-                no2_dst.write(annual_total_no2, total_band_idx + 1)
+                no_dst.write(sum_all_no, total_band_idx + 1)
+                no2_dst.write(sum_all_no2, total_band_idx + 1)
                 
                 # Copy description for SumAllSectors band
                 total_band_desc = src.descriptions[total_band_idx]
@@ -183,10 +213,36 @@ def process_yearly_emissions(input_path, output_no_path, output_no2_path):
                 no2_dst.set_band_description(total_band_idx + 1, total_band_desc)
                 
                 print("Sector processing completed")
+                
+                # Print verification sums
+                print("\n=== Verification Sums ===")
+                print("NO sums per sector (kg):")
+                total_no = 0
+                for sector, val in sector_no_sums.items():
+                    mass = val * pixel_area
+                    total_no += mass
+                    print(f"{sector}: {mass:.2f}")
+                
+                print("\nNO2 sums per sector (kg):")
+                total_no2 = 0
+                for sector, val in sector_no2_sums.items():
+                    mass = val * pixel_area
+                    total_no2 += mass
+                    print(f"{sector}: {mass:.2f}")
+                
+                print(f"\nTotal NO from sectors: {total_no:.2f} kg")
+                print(f"Total NO2 from sectors: {total_no2:.2f} kg")
+                print(f"Combined total: {total_no + total_no2:.2f} kg")
+                
+                # Calculate and print SumAllSectors band values
+                sum_all_no_mass = np.nansum(sum_all_no) * pixel_area
+                sum_all_no2_mass = np.nansum(sum_all_no2) * pixel_area
+                print(f"\nSumAllSectors NO: {sum_all_no_mass:.2f} kg")
+                print(f"SumAllSectors NO2: {sum_all_no2_mass:.2f} kg")
+                print(f"SumAllSectors combined: {sum_all_no_mass + sum_all_no2_mass:.2f} kg")
         
         except Exception as e:
             print(f"Error during processing: {str(e)}")
-            # Clean up potentially corrupted files
             if os.path.exists(output_no_path):
                 os.remove(output_no_path)
             if os.path.exists(output_no2_path):
@@ -195,7 +251,7 @@ def process_yearly_emissions(input_path, output_no_path, output_no2_path):
     
     print(f"\nProcessing completed in {time.time()-start_time:.2f} seconds")
     print(f"Annual NO emissions saved to: {output_no_path}")
-    print(f"Annual NO₂ emissions saved to: {output_no2_path}")
+    print(f"Annual NO2 emissions saved to: {output_no2_path}")
 
 def process_pm_speciation(pm10_path, pm2_5_path, speciation_file, country_code, year, output_dir):
     """
@@ -448,7 +504,7 @@ def calculate_mass_balance(job_parameters, data_parameters, sectors, species):
         if os.path.exists(nox_path):
             try:
                 process_yearly_emissions(nox_path, no_path, no2_path)
-                print("nox splitting completed successfully to NO and NO2.")
+                print("NOx splitting completed successfully to NO and NO2.")
             except Exception as e:
                 print(f"Error during NOx splitting: {str(e)}")
         else:

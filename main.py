@@ -32,14 +32,15 @@ def main():
     
     ## Create proxies and downscale
     downscaling_proxies(data_parameters, job_parameters, bbox_grid, bbox_epsg)
-    downscale_emissions(job_parameters, sectors, gdf_grid, bbox_grid, bbox_epsg)
+    downscale_emissions(job_parameters, sectors, gdf_grid, bbox_grid, bbox_epsg, data_parameters)
 
     ## Apply mass balance correction
     calculate_mass_balance(job_parameters, data_parameters, sectors, job_parameters['species'])
 
-    ## Apply temporal disaggregation
-    profiler = TemporalProfiler(data_parameters, job_parameters)
-    profiler.apply_temporal_profiles(job_parameters, sectors)
+    ## Apply temporal disaggregation only if enabled
+    if job_parameters.get('temporal', {}).get('apply_temporal', False):
+        profiler = TemporalProfiler(data_parameters, job_parameters)
+        profiler.apply_temporal_profiles(job_parameters, sectors)
 
 if __name__ == "__main__":
     main()
