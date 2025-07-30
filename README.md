@@ -16,7 +16,9 @@ This code repository downscales a gridded emission inventory using surface chara
 
 5. Speciation on PM (both PM2.5 and PM10) to EC, OC, SO4, Na, OthMin (Other Minerals) - both fine and coarse using the CAMS-REG-v6 profiles from TNO.
 
-5. Output in GeoTIFF format with effective big geotiff output handling for outputs with more than 60000 bands. 
+6. Creating dummy O3 Geotiff for efficient O3 simulation in PALM.
+
+7. Output in GeoTIFF format with effective big geotiff output handling for outputs with more than 60000 bands. 
 
 
 ## The tool consists of seven main components:
