@@ -1,4 +1,4 @@
-#With O3 and buildings
+#VIIRS included
 import os
 import numpy as np
 import geopandas as gpd
@@ -21,7 +21,6 @@ from io import BytesIO
 gdal.UseExceptions()
 
 def bbox_transform(in_crs, out_crs, cell_minx, cell_miny, cell_maxx, cell_maxy, order_xy=True):
-    """Enhanced bbox transformation with error handling"""
     try:
         transformer = Transformer.from_crs(out_crs, in_crs, always_xy=order_xy)
         xmin, ymin = transformer.transform(cell_minx, cell_miny)
@@ -31,7 +30,6 @@ def bbox_transform(in_crs, out_crs, cell_minx, cell_miny, cell_maxx, cell_maxy, 
         raise ValueError(f"CRS transformation failed: {str(e)}")
 
 def nfr_to_gnfr(job_parameters, gdf_data, sectors):
-    """Convert NFR to GNFR sectors with improved column handling"""
     coln = list(gdf_data.columns)
     src_type = [item[0] for item in sectors]
     col_sum = []
@@ -65,28 +63,22 @@ def nfr_to_gnfr(job_parameters, gdf_data, sectors):
     return gdf_data[col_out].drop_duplicates()
 
 def create_building_mask(bbox, epsg_code, resolution, building_shp_path):
-    """Create a binary mask for building footprints"""
     try:
-        # Convert bbox to tuple if it's a list
         if isinstance(bbox, list):
             bbox = tuple(bbox)
             
-        # Read building footprints
         buildings = gpd.read_file(building_shp_path, bbox=bbox)
         if buildings.empty:
             print("Warning: No buildings found in the bounding box")
             return None, None
             
-        # Convert to target CRS
         buildings = buildings.to_crs(epsg=epsg_code)
         
-        # Create transform for the mask raster
         xmin, ymin, xmax, ymax = bbox
         transform = from_bounds(xmin, ymin, xmax, ymax, 
                               int((xmax - xmin) / resolution),
                               int((ymax - ymin) / resolution))
         
-        # Rasterize buildings (1 for buildings, 0 for non-buildings)
         mask_shape = (int((ymax - ymin) / resolution), 
                      int((xmax - xmin) / resolution))
         building_mask = rasterize(
@@ -104,26 +96,16 @@ def create_building_mask(bbox, epsg_code, resolution, building_shp_path):
         return None, None
 
 def clean_emission_array(array, building_mask=None):
-    """
-    Clean emission array by:
-    1. Applying building mask (set to NaN)
-    2. Converting zeros and negative values to NaN
-    3. Keeping only positive values
-    """
-    # Create a copy to avoid modifying original
     cleaned = array.copy()
     
-    # Apply building mask if provided
     if building_mask is not None:
         cleaned[building_mask == 1] = np.nan
     
-    # Convert zeros and negatives to NaN
     cleaned[cleaned <= 0] = np.nan
     
     return cleaned
 
 def prep_greta_data(data_parameters, job_parameters, sectors):
-    """Prepare GRETA data with enhanced error handling and proper unit conversion"""
     bbox_grid = [
         job_parameters['min_lon'],
         job_parameters['min_lat'],
@@ -164,30 +146,25 @@ def prep_greta_data(data_parameters, job_parameters, sectors):
     except Exception as e:
         print(f"Warning: Could not save point sources: {str(e)}")
 
-    # Calculate area in km² (original geometry is in m²)
     gdf_grid['area_km2'] = gdf_grid.geometry.area / 1e6
     
-    # Conversion factors
-    g_to_kg = 1e6  # 1 Gg = 1,000,000 kg
-    km2_to_m2 = 1e6  # 1 km² = 1,000,000 m²
-    conversion_factor = g_to_kg / km2_to_m2  # This equals 1 (1 Gg/km² = 1 kg/m²)
+    g_to_kg = 1e6
+    km2_to_m2 = 1e6
+    conversion_factor = g_to_kg / km2_to_m2
 
     for spec in job_parameters['species']:
         for sec in [s[0] for s in sectors]:
             col_name = f"{sec}_{spec}"
             
-            # Convert point sources (PRTR) from Gg to kg
             if col_name in gdf_prtr.columns:
-                gdf_prtr[col_name] *= g_to_kg  # Gg → kg
+                gdf_prtr[col_name] *= g_to_kg
             
-            # Convert grid data from Gg/km² to kg/m²
             if col_name in gdf_grid.columns:
-                gdf_grid[col_name] = gdf_grid[col_name] * conversion_factor  # Gg/km² → kg/m²
+                gdf_grid[col_name] = gdf_grid[col_name] * conversion_factor
 
     return gdf_grid, bbox_grid, bbox_epsg
 
 def create_in_memory_raster(array, transform, projection, data_type=gdal.GDT_Float32):
-    """Create an in-memory GDAL raster from a numpy array"""
     driver = gdal.GetDriverByName('MEM')
     rows, cols = array.shape
     mem_raster = driver.Create('', cols, rows, 1, data_type)
@@ -197,10 +174,8 @@ def create_in_memory_raster(array, transform, projection, data_type=gdal.GDT_Flo
     return mem_raster
 
 def create_zero_emission_file(job_parameters, rows, cols, clc_trans, clc_wkt, main_sectors):
-    """Create a zero-valued emission file for O3 when NOx is present"""
     output_fn = os.path.join(job_parameters['job_path'], 'emission_o3_yearly.tif')
     
-    # Create empty array filled with zeros
     zero_arr = np.zeros((rows, cols, len(main_sectors)), dtype=np.float32)
     
     try:
@@ -216,7 +191,6 @@ def create_zero_emission_file(job_parameters, rows, cols, clc_trans, clc_wkt, ma
         dst_ds.SetGeoTransform(clc_trans)
         dst_ds.SetProjection(clc_wkt)
 
-        # Write all bands with zeros
         for sec_idx, sec in enumerate(main_sectors):
             band = dst_ds.GetRasterBand(sec_idx+1)
             band.WriteArray(zero_arr[:,:,sec_idx])
@@ -240,7 +214,6 @@ def create_zero_emission_file(job_parameters, rows, cols, clc_trans, clc_wkt, ma
         print(f"\nError creating zero-valued O3 file: {str(e)}")
 
 def downscale_emissions(job_parameters, sectors, gdf_grid, bbox, epsg, data_parameters):
-    """Enhanced downscaling with building removal and proper NAN handling"""
     print('\n=== Starting Emission Downscaling ===')
     print(f"Downscaling BBOX: {bbox}")
     print(f"Resolution: {job_parameters['resol']} m")
@@ -251,13 +224,11 @@ def downscale_emissions(job_parameters, sectors, gdf_grid, bbox, epsg, data_para
     cols = round((x_max - x_min) / resol)
     rows = round((y_max - y_min) / resol)
     
-    # Ensure we have at least 1 cell
     cols = max(1, cols)
     rows = max(1, rows)
     
     print(f"Output grid: {rows}x{cols} cells")
 
-    # Create building mask
     building_shp_path = data_parameters.get('building_shp')
     if building_shp_path and os.path.exists(building_shp_path):
         building_mask, _ = create_building_mask(bbox, epsg, resol, building_shp_path)
@@ -265,12 +236,11 @@ def downscale_emissions(job_parameters, sectors, gdf_grid, bbox, epsg, data_para
         print("Warning: Building shapefile not found or not specified in config")
         building_mask = None
     
-    # Conversion factors
-    GG_TO_KG = 1e6  # 1 Gg = 1,000,000 kg
-    KM2_TO_M2 = 1e6  # 1 km² = 1,000,000 m²
-    CONV_FACTOR = GG_TO_KG / KM2_TO_M2  # Direct Gg/km² → kg/m²
-    coarse_res = 1000  # 1km coarse resolution
-    patch_size = int(coarse_res / resol)  # Size of coarse cell in fine cells
+    GG_TO_KG = 1e6
+    KM2_TO_M2 = 1e6
+    CONV_FACTOR = GG_TO_KG / KM2_TO_M2
+    coarse_res = 1000
+    patch_size = int(coarse_res / resol)
 
     def load_proxy(proxy_path):
         try:
@@ -288,6 +258,7 @@ def downscale_emissions(job_parameters, sectors, gdf_grid, bbox, epsg, data_para
         clc_arr = load_proxy('clc_proxy.tif')[:rows, :cols]
         osm_arr = load_proxy('osm_proxy.tif')[:rows, :cols]
         pop_arr = load_proxy('pop_proxy.tif')[:rows, :cols]
+        nightlight_arr = load_proxy('nightlight_proxy.tif')[:rows, :cols]
         
         clc_ds = gdal.Open('clc_proxy.tif')
         clc_trans = (x_min, resol, 0, y_max, 0, -resol)
@@ -300,7 +271,6 @@ def downscale_emissions(job_parameters, sectors, gdf_grid, bbox, epsg, data_para
     max_input_values = {}
     max_output_values = {}
 
-    # Check if NOx is in species list and create zero O3 file if needed
     if 'nox' in [s.lower() for s in job_parameters['species']] and 'o3' not in [s.lower() for s in job_parameters['species']]:
         print("\nNOx detected in species list - creating zero-valued O3 emission file")
         create_zero_emission_file(job_parameters, rows, cols, clc_trans, clc_wkt, main_sectors)
@@ -317,12 +287,10 @@ def downscale_emissions(job_parameters, sectors, gdf_grid, bbox, epsg, data_para
                 print(f"\nSkipping {col_name}: No emissions found")
                 continue
 
-            # Store max input value
             max_input = gdf_grid[col_name].max()
             max_input_values[spec][sec] = max_input
 
             try:
-                # Create coarse resolution grid in memory (keep original Gg/km² units)
                 out_grid = make_geocube(
                     vector_data=gdf_grid,
                     measurements=[col_name],
@@ -330,21 +298,19 @@ def downscale_emissions(job_parameters, sectors, gdf_grid, bbox, epsg, data_para
                     output_crs=f"EPSG:{epsg}"
                 )
                 out_grid[col_name] = out_grid[col_name].fillna(0)
-                
-                # Convert to numpy array directly
                 emis_arr = out_grid[col_name].values
                 
-                # Get sector-specific proxy
+                # Sector-specific proxy assignments with new proxies
                 if sec == 'A_PublicPower':
-                    proxy = np.isin(clc_arr, [121]).astype(float)
+                    proxy = np.isin(clc_arr, [121]).astype(float) * nightlight_arr
                 elif sec == 'B_Industry':
-                    proxy = np.isin(clc_arr, [121, 131, 133]).astype(float)
+                    proxy = np.isin(clc_arr, [121, 131, 133]).astype(float) * nightlight_arr
                 elif sec == 'C_OtherStationaryComb':
-                    proxy = pop_arr.copy()
+                    proxy = (pop_arr * 0.5)
                 elif sec == 'D_Fugitives':
                     proxy = np.isin(clc_arr, [121, 131]).astype(float)
                 elif sec == 'E_Solvents':
-                    proxy = pop_arr.copy()
+                    proxy = nightlight_arr
                 elif sec == 'F_RoadTransport':
                     proxy = osm_arr.copy()
                     if np.sum(proxy) <= 0:
@@ -364,16 +330,13 @@ def downscale_emissions(job_parameters, sectors, gdf_grid, bbox, epsg, data_para
                 elif sec == 'SumAllSectors':
                     continue
 
-                # Process in patches corresponding to coarse cells
                 sector_arr = np.zeros((rows, cols), dtype=np.float32)
                 
                 for i in range(0, rows, patch_size):
                     for j in range(0, cols, patch_size):
-                        # Get current patch bounds
                         i_end = min(i + patch_size, rows)
                         j_end = min(j + patch_size, cols)
                         
-                        # Get coarse cell emissions (Gg/km²)
                         coarse_i, coarse_j = i//patch_size, j//patch_size
                         if coarse_i >= emis_arr.shape[0] or coarse_j >= emis_arr.shape[1]:
                             continue
@@ -381,40 +344,29 @@ def downscale_emissions(job_parameters, sectors, gdf_grid, bbox, epsg, data_para
                         coarse_emis = emis_arr[coarse_i, coarse_j]
                         
                         if coarse_emis > 0:
-                            # Get proxy patch
                             proxy_patch = proxy[i:i_end, j:j_end]
                             proxy_sum = np.sum(proxy_patch)
                             
                             if proxy_sum > 0:
-                                # Scale proxy weights to sum to patch_size^2 to maintain mass
                                 proxy_norm = (proxy_patch / proxy_sum) * (patch_size**2)
                             else:
                                 proxy_norm = np.ones_like(proxy_patch)
                             
-                            # Convert directly from Gg/km² to kg/m² and distribute
                             sector_arr[i:i_end, j:j_end] = (coarse_emis * CONV_FACTOR) * proxy_norm
 
-                # Clean the emission array (apply building mask and remove zeros/negatives)
                 sector_arr = clean_emission_array(sector_arr, building_mask)
-
-                # Store max output value
                 max_output = np.nanmax(sector_arr)
                 max_output_values[spec][sec] = max_output
-
                 yearly_arr[:,:,sec_idx] = sector_arr
 
             except Exception as e:
                 print(f"\nError processing {sec}: {str(e)}")
                 continue
 
-        # Sum all sectors if needed
         if 'SumAllSectors' in main_sectors:
             sum_idx = main_sectors.index('SumAllSectors')
-            # Use nansum to properly handle NaN values
             yearly_arr[:,:,sum_idx] = np.nansum(yearly_arr[:,:,:-1], axis=2)
-            # Clean the SumAllSectors band as well
             yearly_arr[:,:,sum_idx] = clean_emission_array(yearly_arr[:,:,sum_idx], building_mask)
-
         # Create output file
         output_fn = os.path.join(job_parameters['job_path'], f'emission_{spec}_yearly.tif')
         try:
@@ -423,7 +375,7 @@ def downscale_emissions(job_parameters, sectors, gdf_grid, bbox, epsg, data_para
                 output_fn,
                 cols,
                 rows,
-                len(main_sectors),  # All bands including SumAllSectors
+                len(main_sectors),
                 gdal.GDT_Float32,
                 options=['COMPRESS=LZW', 'PREDICTOR=2']
             )
@@ -446,7 +398,9 @@ def downscale_emissions(job_parameters, sectors, gdf_grid, bbox, epsg, data_para
                 'temporal_status': 'Yearly_only',
                 'building_removal': 'Applied to all bands',
                 'value_cleaning': 'Zeros and negatives set to NAN',
-                'building_shp': data_parameters.get('building_shp', 'Not specified')
+                'building_shp': data_parameters.get('building_shp', 'Not specified'),
+                'nightlight_proxy': data_parameters.get('viirs_nightlight', 'Not used'),
+                'proxy_notes': 'Nightlight used for commercial/industrial sectors, building height for heating'
             }
             dst_ds.SetMetadata(metadata)
             dst_ds = None

@@ -4,6 +4,7 @@
 Proxy Tools for Emission Downscaling
 - Enhanced OSM road processing (smooth continuous lines)
 - Improved Urban Atlas land use classification
+- Nighttime Lights from VIIRS
 - Proper integration with emission downscaling
 """
 import os
@@ -37,35 +38,27 @@ def bbox_transform(in_crs, out_crs, cell_minx, cell_miny, cell_maxx, cell_maxy, 
         raise ValueError(f"CRS transformation failed: {str(e)}")
 
 def rasterize_clip_shp(job_parameters, out_fn, gdf, lyr, bbox, epsg):
-    """Enhanced rasterization for land use data with proper handling of classes"""
     print(f"Rasterizing {lyr} to {out_fn}...")
     tmp_fn = 'tmp_ras.tif'
     
     try:
-        # Ensure weights are properly assigned
         if 'weight' not in gdf.columns:
             raise ValueError("Weight column missing in land use data")
             
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
-            
-            # Create geocube with proper resolution and CRS
             out_grid = make_geocube(
                 vector_data=gdf,
                 measurements=['weight'],
                 resolution=(-job_parameters['resol'], job_parameters['resol']),
                 output_crs=f"EPSG:{epsg}"
             )
-            
-            # Convert to raster
             out_grid.rio.to_raster(tmp_fn)
-            
-            # Clip to exact bbox
             ds = gdal.Open(tmp_fn)
             gdal.Warp(out_fn, ds,
                     xRes=job_parameters['resol'], 
                     yRes=job_parameters['resol'],
-                    resampleAlg='near',  # Use nearest neighbor for categorical data
+                    resampleAlg='near',
                     format='GTiff',
                     dstSRS=f'EPSG:{epsg}',
                     outputBounds=(bbox[0], bbox[1], bbox[2], bbox[3]),
@@ -81,7 +74,6 @@ def rasterize_clip_shp(job_parameters, out_fn, gdf, lyr, bbox, epsg):
             os.remove(tmp_fn)
 
 def rasterize_line_shp(out_fn, gdf, lyr, bbox, epsg, resolution):
-    """Specialized rasterization for road features"""
     print(f"Rasterizing {lyr} to {out_fn} with smooth lines...")
     
     x_min, y_min, x_max, y_max = bbox
@@ -118,11 +110,9 @@ def rasterize_line_shp(out_fn, gdf, lyr, bbox, epsg, resolution):
     ds = None
     out_ds = None
     
-    # Post-process to ensure connectivity
     ds = gdal.Open(out_fn, gdal.GA_Update)
     band = ds.GetRasterBand(1)
     arr = band.ReadAsArray()
-    
     mask = arr > 0
     dilated = binary_dilation(mask, structure=np.ones((3,3)), iterations=1)
     arr[dilated & ~mask] = np.nanmean(arr[mask])
@@ -131,7 +121,6 @@ def rasterize_line_shp(out_fn, gdf, lyr, bbox, epsg, resolution):
     ds = None
 
 def prepare_osm_roads(bbox, epsg):
-    """Prepare OSM road network with smooth lines"""
     print("Preparing OSM road network...")
     try:
         bbox_4326 = bbox_transform(4326, int(epsg), bbox[0], bbox[1], bbox[2], bbox[3])
@@ -171,9 +160,7 @@ def prepare_osm_roads(bbox, epsg):
         gdf_roads = gdf_roads.dissolve(by='weight').reset_index()
         gdf_roads = gdf_roads.to_crs(epsg=int(epsg))
         
-        # Ensure we always return at least one road feature
         if gdf_roads.empty:
-            # Create a dummy road along the bbox diagonal
             minx, miny, maxx, maxy = bbox
             dummy_road = gpd.GeoDataFrame(
                 {'weight': [1.0]},
@@ -186,7 +173,6 @@ def prepare_osm_roads(bbox, epsg):
         
     except Exception as e:
         print(f"Error preparing OSM roads: {str(e)}")
-        # Fallback to a simple diagonal road
         minx, miny, maxx, maxy = bbox
         return gpd.GeoDataFrame(
             {'weight': [1.0]},
@@ -195,39 +181,58 @@ def prepare_osm_roads(bbox, epsg):
         )
 
 def process_urban_atlas(data_parameters, bbox, epsg):
-    """Process Urban Atlas land use data without applying weights"""
-    print("Processing Urban Atlas land use data (keeping original classes)...")
+    print("Processing Urban Atlas land use data...")
     
     try:
-        # Transform bbox to Urban Atlas CRS (EPSG:3035)
         bbox_3035 = bbox_transform(3035, epsg, bbox[0], bbox[1], bbox[2], bbox[3])
-        
-        # Load data with proper bbox filtering
         gdf_clc = gpd.read_file(
             data_parameters['urbanAtlas_dir'],
             bbox=(bbox_3035[0], bbox_3035[1], bbox_3035[2], bbox_3035[3])
         )
         
-        # Ensure code_2018 column exists and is integer
         if 'code_2018' not in gdf_clc.columns:
             raise ValueError("Urban Atlas data missing 'code_2018' column")
             
-        # Convert class codes to numeric and fill missing values
         gdf_clc['code_2018'] = pd.to_numeric(gdf_clc['code_2018'], errors='coerce').fillna(-1).astype(int)
-        
-        # Use original class codes as weights (no weighting applied)
         gdf_clc['weight'] = gdf_clc['code_2018']
-        
-        # Convert to target CRS
         gdf_clc = gdf_clc.to_crs(epsg=epsg)
-        
-        # Ensure we have valid geometries
         gdf_clc = gdf_clc[gdf_clc.is_valid]
         
         return gdf_clc
         
     except Exception as e:
         raise RuntimeError(f"Urban Atlas processing failed: {str(e)}")
+
+def process_nightlight(data_parameters, bbox, epsg, resolution):
+    print("Processing VIIRS nighttime light data...")
+    try:
+        if os.path.exists('nightlight_proxy.tif'):
+            os.remove('nightlight_proxy.tif')
+            
+        gdal.Warp('nightlight_proxy.tif', data_parameters['viirs_nightlight'],
+                xRes=resolution, yRes=resolution,
+                resampleAlg='bilinear', 
+                format='GTiff',
+                dstSRS=f'EPSG:{epsg}',
+                outputBounds=bbox,
+                outputBoundsSRS=f'EPSG:{epsg}',
+                targetAlignedPixels=True,
+                callback=gdal.TermProgress_nocb)
+        
+        ds = gdal.Open('nightlight_proxy.tif', gdal.GA_Update)
+        band = ds.GetRasterBand(1)
+        arr = band.ReadAsArray()
+        arr[arr < 0] = 0
+        if np.max(arr) > 0:
+            arr = arr / np.max(arr)
+        band.WriteArray(arr)
+        ds.FlushCache()
+        ds = None
+        return True
+        
+    except Exception as e:
+        print(f"Error processing nighttime lights: {str(e)}")
+        return False
 
 def downscaling_proxies(data_parameters, job_parameters, bbox, epsg):
     print('\n=== Preparing Proxies ===')
@@ -244,13 +249,11 @@ def downscaling_proxies(data_parameters, job_parameters, bbox, epsg):
         raise ValueError(f"Invalid EPSG code: {epsg}")
 
     # 1. Process OSM roads
-    # 1. Process OSM roads
     print("\n1. Processing OSM roads...")
     gdf_roads = prepare_osm_roads(bbox, epsg)
     if not gdf_roads.empty:
         rasterize_line_shp('osm_proxy.tif', gdf_roads, 'weight', bbox, epsg, resol)
     else:
-        # Create a properly sized array of ones
         neutral = np.ones((rows, cols), dtype=np.float32)
         driver = gdal.GetDriverByName('GTiff')
         ds = driver.Create('osm_proxy.tif', cols, rows, 1, gdal.GDT_Float32)
@@ -261,26 +264,19 @@ def downscaling_proxies(data_parameters, job_parameters, bbox, epsg):
         band.FlushCache()
         ds = None
 
-    # 2. Process Urban Atlas with enhanced classification
-    print("\n2. Processing Urban Atlas with complete class coverage...")
+    # 2. Process Urban Atlas
+    print("\n2. Processing Urban Atlas...")
     try:
         gdf_clc = process_urban_atlas(data_parameters, bbox, epsg)
         rasterize_clip_shp(job_parameters, 'clc_proxy.tif', gdf_clc, 'weight', bbox, epsg)
-        
-        # Verify all classes were processed
-        unique_classes = set(gdf_clc['code_2018'].unique())
-        print(f"Processed {len(unique_classes)} Urban Atlas classes")
-        
     except Exception as e:
         raise RuntimeError(f"Urban Atlas processing failed: {str(e)}")
 
-    # 3. Process population density - REMOVED SYMLINK CREATION
+    # 3. Process population density
     print("\n3. Processing population density...")
     try:
-        # First remove any existing file
         if os.path.exists('pop_proxy.tif'):
             os.remove('pop_proxy.tif')
-            
         gdal.Warp('pop_proxy.tif', data_parameters['popul_dir'],
                 xRes=resol, yRes=resol,
                 resampleAlg='bilinear', 
@@ -290,9 +286,21 @@ def downscaling_proxies(data_parameters, job_parameters, bbox, epsg):
                 outputBoundsSRS=f'EPSG:{epsg}',
                 targetAlignedPixels=True,
                 callback=gdal.TermProgress_nocb)
-        
     except Exception as e:
         raise RuntimeError(f"Population processing failed: {str(e)}")
 
+    # 4. Process nighttime lights
+    print("\n4. Processing nighttime lights...")
+    if not process_nightlight(data_parameters, bbox, epsg, resol):
+        print("Using neutral nighttime light proxy")
+        neutral = np.ones((rows, cols), dtype=np.float32) * 0.5
+        driver = gdal.GetDriverByName('GTiff')
+        ds = driver.Create('nightlight_proxy.tif', cols, rows, 1, gdal.GDT_Float32)
+        ds.SetGeoTransform((x_min, resol, 0, y_max, 0, -resol))
+        ds.SetProjection(f'EPSG:{epsg}')
+        band = ds.GetRasterBand(1)
+        band.WriteArray(neutral)
+        band.FlushCache()
+        ds = None
+
     print("\n=== Proxy preparation completed ===")
-###########
