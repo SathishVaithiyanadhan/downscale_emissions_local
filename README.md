@@ -32,9 +32,9 @@ This tool is aimed to downscale a gridded emission inventory using surface chara
 
 5. The Temporal disaggregation of emissions (temporal_profiles.py) - Applies the Edgar's temporal profiles to the yearly downscaled emissions for the high temporal resolution of emissions (yearly -> hourly) for the specified date. 
 
-6. Main workflow (main.py) - Orchestrates the process
+6. Main workflow (main.py) - Orchestrates the process.
 
-7. The input configuration file (default_config.yaml)
+7. The input configuration file (default_config.yaml).
 
 ## Input data
 The following data is required to downscale a emission inventory using this tool.
