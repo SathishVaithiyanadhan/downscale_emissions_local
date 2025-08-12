@@ -22,9 +22,9 @@ This tool is aimed to downscale a gridded emission inventory using surface chara
 
 ## The tool consists of seven main components:
 
-1. Configuration parser (tools.py) - Handles YAML configuration
+1. Configuration parser (tools.py) - Handles YAML configuration.
 
-2. Proxy preparation (proxy_tools.py) - Processes spatial proxies
+2. Proxy preparation (proxy_tools.py) - Processes spatial proxies.
 
 3. Emission processing (emission_tools.py) - Core downscaling algorithms
 
