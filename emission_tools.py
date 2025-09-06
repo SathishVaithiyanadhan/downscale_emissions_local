@@ -1,3 +1,4 @@
+#VIIRS included
 import os
 import numpy as np
 import geopandas as gpd
@@ -388,7 +389,6 @@ def downscale_emissions(job_parameters, sectors, gdf_grid, bbox, epsg, data_para
 
                 # apply mask/cleaning if needed
                 # sector_arr = clean_emission_array(sector_arr, building_mask)
-
                 max_output = np.nanmax(sector_arr)
                 max_output_values[spec][sec] = max_output
                 yearly_arr[:, :, sec_idx] = sector_arr
@@ -400,6 +400,7 @@ def downscale_emissions(job_parameters, sectors, gdf_grid, bbox, epsg, data_para
         if 'SumAllSectors' in main_sectors:
             sum_idx = main_sectors.index('SumAllSectors')
             yearly_arr[:, :, sum_idx] = np.nansum(yearly_arr[:, :, :-1], axis=2)
+            #yearly_arr[:,:,sum_idx] = clean_emission_array(yearly_arr[:,:,sum_idx], building_mask)
 
         # write output file
         output_fn = os.path.join(job_parameters['job_path'], f'emission_{spec}_yearly.tif')
