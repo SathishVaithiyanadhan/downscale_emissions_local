@@ -1,4 +1,3 @@
-#VIIRS included
 import os
 import numpy as np
 import geopandas as gpd
@@ -17,6 +16,7 @@ from rasterio.transform import from_bounds
 import gc
 import tempfile
 from io import BytesIO
+from scipy.ndimage import zoom
 
 gdal.UseExceptions()
 
@@ -213,6 +213,36 @@ def create_zero_emission_file(job_parameters, rows, cols, clc_trans, clc_wkt, ma
     except Exception as e:
         print(f"\nError creating zero-valued O3 file: {str(e)}")
 
+def distribute_emissions_using_proxy(coarse_emis, proxy_patch, patch_size, conversion_factor):
+    """
+    Distribute emissions within a coarse grid cell based on proxy values
+    
+    Args:
+        coarse_emis: Total emissions in the coarse grid cell (Gg/km²)
+        proxy_patch: High-resolution proxy values for the cell
+        patch_size: Size of the high-resolution patch
+        conversion_factor: Conversion factor from Gg/km² to kg/m²
+    
+    Returns:
+        High-resolution distributed emissions
+    """
+    # Convert coarse emissions to total kg in the cell
+    cell_area_km2 = (patch_size * patch_size) / 1e6  # Area in km²
+    total_emissions_kg = coarse_emis * cell_area_km2 * 1e6  # Convert Gg to kg
+    
+    # Normalize proxy values to get distribution weights
+    proxy_sum = np.sum(proxy_patch)
+    if proxy_sum > 0:
+        weights = proxy_patch / proxy_sum
+    else:
+        # If no proxy information, distribute evenly
+        weights = np.ones_like(proxy_patch) / (patch_size * patch_size)
+    
+    # Distribute emissions based on weights and convert to kg/m²
+    distributed_emissions = (total_emissions_kg * weights) / (patch_size * patch_size)
+    
+    return distributed_emissions
+
 def downscale_emissions(job_parameters, sectors, gdf_grid, bbox, epsg, data_parameters):
     print('\n=== Starting Emission Downscaling ===')
     print(f"Downscaling BBOX: {bbox}")
@@ -223,10 +253,10 @@ def downscale_emissions(job_parameters, sectors, gdf_grid, bbox, epsg, data_para
     resol = job_parameters['resol']
     cols = round((x_max - x_min) / resol)
     rows = round((y_max - y_min) / resol)
-    
+
     cols = max(1, cols)
     rows = max(1, rows)
-    
+
     print(f"Output grid: {rows}x{cols} cells")
 
     building_shp_path = data_parameters.get('building_shp')
@@ -235,12 +265,9 @@ def downscale_emissions(job_parameters, sectors, gdf_grid, bbox, epsg, data_para
     else:
         print("Warning: Building shapefile not found or not specified in config")
         building_mask = None
-    
-    GG_TO_KG = 1e6
-    KM2_TO_M2 = 1e6
-    CONV_FACTOR = GG_TO_KG / KM2_TO_M2
-    coarse_res = 1000
-    patch_size = int(coarse_res / resol)
+
+    # conversion factor (Gg/km² -> kg/m²)
+    CONV_FACTOR = 1e6 / 1e6
 
     def load_proxy(proxy_path):
         try:
@@ -259,7 +286,7 @@ def downscale_emissions(job_parameters, sectors, gdf_grid, bbox, epsg, data_para
         osm_arr = load_proxy('osm_proxy.tif')[:rows, :cols]
         pop_arr = load_proxy('pop_proxy.tif')[:rows, :cols]
         nightlight_arr = load_proxy('nightlight_proxy.tif')[:rows, :cols]
-        
+
         clc_ds = gdal.Open('clc_proxy.tif')
         clc_trans = (x_min, resol, 0, y_max, 0, -resol)
         clc_wkt = clc_ds.GetProjection()
@@ -291,24 +318,44 @@ def downscale_emissions(job_parameters, sectors, gdf_grid, bbox, epsg, data_para
             max_input_values[spec][sec] = max_input
 
             try:
+                # create coarse emission raster
                 out_grid = make_geocube(
                     vector_data=gdf_grid,
                     measurements=[col_name],
-                    resolution=(-coarse_res, coarse_res),
+                    resolution=(-1000, 1000),   # coarse 1 km grid
                     output_crs=f"EPSG:{epsg}"
                 )
                 out_grid[col_name] = out_grid[col_name].fillna(0)
                 emis_arr = out_grid[col_name].values
-                
-                # Sector-specific proxy assignments with new proxies
+
+                # create in-memory raster for resampling
+                coarse_transform = (x_min, 1000, 0, y_max, 0, -1000)
+                mem_ds = create_in_memory_raster(emis_arr, coarse_transform, clc_wkt)
+
+                # resample to target resolution
+                emis_interp_ds = gdal.Warp(
+                    '', mem_ds,format='MEM',
+                    xRes=resol, yRes=resol,
+                    resampleAlg='bilinear',
+                    outputBounds=[x_min, y_min, x_max, y_max]
+                )
+                emis_interp = emis_interp_ds.ReadAsArray()
+                emis_interp_ds = None
+                mem_ds = None
+
+                # ensure shape match
+                if emis_interp.shape != (rows, cols):
+                    emis_interp = np.resize(emis_interp, (rows, cols))
+
+                # sector-specific proxies
                 if sec == 'A_PublicPower':
                     proxy = np.isin(clc_arr, [121]).astype(float) * nightlight_arr
                 elif sec == 'B_Industry':
                     proxy = np.isin(clc_arr, [121, 131, 133]).astype(float) * nightlight_arr
                 elif sec == 'C_OtherStationaryComb':
-                    proxy = (pop_arr * 0.5)
+                    proxy = (pop_arr * 0.5) + (nightlight_arr * 0.5)
                 elif sec == 'D_Fugitives':
-                    proxy = np.isin(clc_arr, [121, 131]).astype(float)
+                    proxy = np.isin(clc_arr, [121, 131]).astype(float) * nightlight_arr
                 elif sec == 'E_Solvents':
                     proxy = nightlight_arr
                 elif sec == 'F_RoadTransport':
@@ -316,48 +363,35 @@ def downscale_emissions(job_parameters, sectors, gdf_grid, bbox, epsg, data_para
                     if np.sum(proxy) <= 0:
                         proxy = np.ones_like(proxy)
                 elif sec == 'G_Shipping':
-                    proxy = np.isin(clc_arr, [123]).astype(float)
+                    proxy = np.isin(clc_arr, [123]).astype(float) * nightlight_arr
                 elif sec == 'H_Aviation':
-                    proxy = np.isin(clc_arr, [124]).astype(float)
+                    proxy = np.isin(clc_arr, [124]).astype(float) * nightlight_arr
                 elif sec == 'I_OffRoad':
-                    proxy = np.isin(clc_arr, [122, 244]).astype(float)
+                    proxy = np.isin(clc_arr, [122, 244]).astype(float) * nightlight_arr
                 elif sec == 'J_Waste':
-                    proxy = np.isin(clc_arr, [132]).astype(float)
+                    proxy = np.isin(clc_arr, [132]).astype(float) * nightlight_arr
                 elif sec == 'K_AgriLivestock':
                     proxy = np.isin(clc_arr, [231]).astype(float)
                 elif sec == 'L_AgriOther':
                     proxy = np.isin(clc_arr, [211, 212, 213, 221, 222, 223, 241]).astype(float)
                 elif sec == 'SumAllSectors':
                     continue
+                else:
+                    proxy = np.ones_like(clc_arr, dtype=float)
 
-                sector_arr = np.zeros((rows, cols), dtype=np.float32)
-                
-                for i in range(0, rows, patch_size):
-                    for j in range(0, cols, patch_size):
-                        i_end = min(i + patch_size, rows)
-                        j_end = min(j + patch_size, cols)
-                        
-                        coarse_i, coarse_j = i//patch_size, j//patch_size
-                        if coarse_i >= emis_arr.shape[0] or coarse_j >= emis_arr.shape[1]:
-                            continue
-                            
-                        coarse_emis = emis_arr[coarse_i, coarse_j]
-                        
-                        if coarse_emis > 0:
-                            proxy_patch = proxy[i:i_end, j:j_end]
-                            proxy_sum = np.sum(proxy_patch)
-                            
-                            if proxy_sum > 0:
-                                proxy_norm = (proxy_patch / proxy_sum) * (patch_size**2)
-                            else:
-                                proxy_norm = np.ones_like(proxy_patch)
-                            
-                            sector_arr[i:i_end, j:j_end] = (coarse_emis * CONV_FACTOR) * proxy_norm
+                # normalize proxy
+                proxy_max = np.max(proxy)
+                proxy_norm = proxy / (proxy_max if proxy_max > 0.01 else 1.0)
 
-                sector_arr = clean_emission_array(sector_arr, building_mask)
+                # final downscaled emissions
+                sector_arr = emis_interp * proxy_norm * CONV_FACTOR
+
+                # apply mask/cleaning if needed
+                # sector_arr = clean_emission_array(sector_arr, building_mask)
+
                 max_output = np.nanmax(sector_arr)
                 max_output_values[spec][sec] = max_output
-                yearly_arr[:,:,sec_idx] = sector_arr
+                yearly_arr[:, :, sec_idx] = sector_arr
 
             except Exception as e:
                 print(f"\nError processing {sec}: {str(e)}")
@@ -365,9 +399,9 @@ def downscale_emissions(job_parameters, sectors, gdf_grid, bbox, epsg, data_para
 
         if 'SumAllSectors' in main_sectors:
             sum_idx = main_sectors.index('SumAllSectors')
-            yearly_arr[:,:,sum_idx] = np.nansum(yearly_arr[:,:,:-1], axis=2)
-            yearly_arr[:,:,sum_idx] = clean_emission_array(yearly_arr[:,:,sum_idx], building_mask)
-        # Create output file
+            yearly_arr[:, :, sum_idx] = np.nansum(yearly_arr[:, :, :-1], axis=2)
+
+        # write output file
         output_fn = os.path.join(job_parameters['job_path'], f'emission_{spec}_yearly.tif')
         try:
             driver = gdal.GetDriverByName('GTiff')
@@ -382,17 +416,16 @@ def downscale_emissions(job_parameters, sectors, gdf_grid, bbox, epsg, data_para
             dst_ds.SetGeoTransform(clc_trans)
             dst_ds.SetProjection(clc_wkt)
 
-            # Write all bands
             for sec_idx, sec in enumerate(main_sectors):
-                band = dst_ds.GetRasterBand(sec_idx+1)
-                arr = yearly_arr[:,:,sec_idx]
+                band = dst_ds.GetRasterBand(sec_idx + 1)
+                arr = yearly_arr[:, :, sec_idx]
                 band.WriteArray(arr)
                 band.SetDescription(f"{sec}_yearly")
                 band.SetNoDataValue(np.nan)
 
             metadata = {
                 'units': 'kg/m²',
-                'conversion': 'Direct Gg/km²→kg/m²',
+                'conversion': 'Proxy-weighted resampling (no coarse patches)',
                 'input_max_values': str(max_input_values),
                 'output_max_values': str(max_output_values),
                 'temporal_status': 'Yearly_only',
@@ -400,7 +433,8 @@ def downscale_emissions(job_parameters, sectors, gdf_grid, bbox, epsg, data_para
                 'value_cleaning': 'Zeros and negatives set to NAN',
                 'building_shp': data_parameters.get('building_shp', 'Not specified'),
                 'nightlight_proxy': data_parameters.get('viirs_nightlight', 'Not used'),
-                'proxy_notes': 'Nightlight used for commercial/industrial sectors, building height for heating'
+                'proxy_notes': 'Nightlight for commercial/industrial, population for heating, OSM for traffic',
+                'distribution_method': 'Smooth bilinear resampling + proxy weighting'
             }
             dst_ds.SetMetadata(metadata)
             dst_ds = None
