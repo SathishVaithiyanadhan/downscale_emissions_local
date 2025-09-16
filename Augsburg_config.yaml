@@ -3,32 +3,27 @@
 data_settings:
   emiss_dir: /home/vaithisa/Input_data/UniAugsburg_2018_Sub2020_Inlandsprinzip_Greta1.1.4.gdb
   urbanAtlas_dir: /home/vaithisa/Input_data/LU_Urban_Atlas/Landuse_Urban_Atlas_LargerArea/UrbanAtlasBBox.gdb
-  #urbanAtlas_dir: /home/vaithisa/Input_data/Schwaben_LU.gdb
   popul_dir: /home/vaithisa/Input_data/GHS_POP_E2020_GLOBE_R2023A_54009_100_V1_0_R4_C19/GHS_POP_E2020_GLOBE_R2023A_54009_100_V1_0_R4_C19.tif
   edgar_dir: /home/vaithisa/Input_data/EDGAR
   pm_speciation_file: /home/vaithisa/Input_data/PM_Speciation_CAMS_REG/CAMS-REG-v6_PM_split.xlsx
-  building_shp: /home/vaithisa/Input_data/OB_SCH_buildingheight.shp
+  building_shp: /home/vaithisa/Input_data/OB_SCH_buildingheight/OB_SCH_buildingheight.shp
   viirs_nightlight: /home/vaithisa/Input_data/VNL_npp_2024_europe.tif
 
 # Simulation parameters
 job_settings:
-  job_path: /home/vaithisa/Downscale_Emissions/Downscale_Winter_200    #Small_area_Emissions_Yearly  #/mnt/c/Users/vaithisa/PHD_Augsburg/6months
+  job_path: /mnt/t/PhD_data/Downscale_Augsburg_full_10m #Small_area_Emissions_Yearly  #/mnt/c/Users/vaithisa/PHD_Augsburg/Downscale_Winter_Bigarea
   job_name: test
-  min_lon: 638000 #636000
-  max_lon: 644000 #646000
-  min_lat: 5357000 #5350000
-  max_lat: 5362000 #5365000
-  #min_lon: 634000  #Augsburg_full_domain
-  #max_lon: 649000
-  #min_lat: 5345000
-  #max_lat: 5373000
-  #min_lon: 545406.926  #Schwaben_full_domain
-  #max_lon: 739206.181  
-  #min_lat: 5237452.65  
-  #max_lat: 5431174.49
+  #min_lon: 638000 #636000
+  #max_lon: 644000 #646000
+  #min_lat: 5356000 #5350000
+  #max_lat: 5362000 #5365000
+  min_lon: 634000  #Augsburg_full_domain
+  max_lon: 649000
+  min_lat: 5345000
+  max_lat: 5373000
   resol: 10
   epsg_code: 25832
-  #species: [pm10]
+  #species: [pm2_5, nox, co2]
   species: [n2o, nmvoc, so2, co, pm10, pm2_5, nh3, pb, cd, hg, as, ni, bc, co2, ch4, nox]
   country: Germany
   inventory: GRETA

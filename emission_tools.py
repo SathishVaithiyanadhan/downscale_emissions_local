@@ -1,4 +1,4 @@
-#VIIRS included
+#Downscale emissions from coarse to fine resolution using proxy data
 import os
 import numpy as np
 import geopandas as gpd
@@ -350,33 +350,47 @@ def downscale_emissions(job_parameters, sectors, gdf_grid, bbox, epsg, data_para
 
                 # sector-specific proxies
                 if sec == 'A_PublicPower':
-                    proxy = np.isin(clc_arr, [121]).astype(float) * nightlight_arr
+                    proxy = np.isin(clc_arr, [12100]).astype(float) * nightlight_arr
+
                 elif sec == 'B_Industry':
-                    proxy = np.isin(clc_arr, [121, 131, 133]).astype(float) * nightlight_arr
+                    proxy = np.isin(clc_arr, [12100, 13100, 13300]).astype(float) * nightlight_arr
+
                 elif sec == 'C_OtherStationaryComb':
-                    proxy = (pop_arr * 0.5) + (nightlight_arr * 0.5)
+                    proxy = (np.isin(clc_arr, [11100, 11210, 11220, 11230, 11240]).astype(float) * pop_arr) \
+                        + (nightlight_arr * 0.5)
+
                 elif sec == 'D_Fugitives':
-                    proxy = np.isin(clc_arr, [121, 131]).astype(float) * nightlight_arr
+                    proxy = np.isin(clc_arr, [12100, 13100]).astype(float) * nightlight_arr
+
                 elif sec == 'E_Solvents':
-                    proxy = nightlight_arr
+                    proxy = np.isin(clc_arr, [11100, 11210, 11220, 11230, 11240, 12100]).astype(float) * nightlight_arr
+
                 elif sec == 'F_RoadTransport':
                     proxy = osm_arr.copy()
                     if np.sum(proxy) <= 0:
                         proxy = np.ones_like(proxy)
+
                 elif sec == 'G_Shipping':
-                    proxy = np.isin(clc_arr, [123]).astype(float) * nightlight_arr
+                    proxy = np.isin(clc_arr, [12300]).astype(float) * nightlight_arr
+
                 elif sec == 'H_Aviation':
-                    proxy = np.isin(clc_arr, [124]).astype(float) * nightlight_arr
+                    proxy = np.isin(clc_arr, [12400]).astype(float) * nightlight_arr
+
                 elif sec == 'I_OffRoad':
-                    proxy = np.isin(clc_arr, [122, 244]).astype(float) * nightlight_arr
+                    proxy = np.isin(clc_arr, [12210, 12220, 12230, 13300]).astype(float) * nightlight_arr
+
                 elif sec == 'J_Waste':
-                    proxy = np.isin(clc_arr, [132]).astype(float) * nightlight_arr
+                    proxy = np.isin(clc_arr, [13100]).astype(float) * nightlight_arr
+
                 elif sec == 'K_AgriLivestock':
-                    proxy = np.isin(clc_arr, [231]).astype(float)
+                    proxy = np.isin(clc_arr, [23000]).astype(float)
+
                 elif sec == 'L_AgriOther':
-                    proxy = np.isin(clc_arr, [211, 212, 213, 221, 222, 223, 241]).astype(float)
+                    proxy = np.isin(clc_arr, [21000, 22000, 24000, 25000]).astype(float)
+
                 elif sec == 'SumAllSectors':
                     continue
+
                 else:
                     proxy = np.ones_like(clc_arr, dtype=float)
 
@@ -445,3 +459,5 @@ def downscale_emissions(job_parameters, sectors, gdf_grid, bbox, epsg, data_para
         except Exception as e:
             print(f"\nError creating output file: {str(e)}")
             continue
+
+####
