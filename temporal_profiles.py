@@ -165,7 +165,8 @@ class TemporalProfiler:
             hourly_factors = np.ones(24) / 24
             print(f"No hourly profile for {edgar_sector}, using uniform distribution")
         
-        annual_weight = (monthly_factor / days_in_month) * weekly_factor
+        #annual_weight = (monthly_factor / days_in_month) * weekly_factor
+        annual_weight = monthly_factor * weekly_factor
         return annual_weight, hourly_factors
 
     def _create_output_files(self, input_fn, base_output_fn, sectors, start_date, end_date, max_bands_per_file=60000):
