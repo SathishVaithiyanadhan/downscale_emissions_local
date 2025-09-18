@@ -3,7 +3,11 @@
 ## Description
 This tool is aimed to downscale a gridded emission inventory using surface characteristics such as land cover types, population density and street types. The tool integrates multiple data sources and applies sector-specific downscaling approaches to create temporally-resolved emission fields suitable for urban air quality modeling. The sector specific emissions are downscaled using a similar method as used in the [UrbEm Hybrid Method to Derive High-Resolution Emissions for City-Scale Air Quality Modeling](https://www.mdpi.com/2073-4433/12/11/1404). Additionally, we included very high resolution downscaling using the spatial proxies, temporal disaggregation of emissions, NOx speciation to NO and NO2, PM speciation - fine adn coarse, effective handling of output big GeoTIFF's which has more than 60000 band limits, etc.,
 
-![alt text](Picture4.png)![alt text](PM25_hourly_SumAllSectors_GRETA2.gif)
+<p float="left">
+  <img src="Picture4.png" width="300" />
+  <img src="PM25_hourly_SumAllSectors_GRETA2.gif" width="300" />
+</p>
+
 
 ## Key features:
 
