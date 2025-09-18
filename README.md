@@ -5,7 +5,7 @@ This tool is aimed to downscale a gridded emission inventory using surface chara
 
 <p float="left">
   <img src="Picture4.png" width="600" />
-  <img src="PM25_hourly_SumAllSectors_GRETA2.gif" width="300" />
+  <img src="PM25_hourly_SumAllSectors_GRETA2.gif" width="250" />
 </p>
 
 
