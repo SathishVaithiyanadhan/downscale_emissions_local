@@ -1,11 +1,6 @@
 
-#####
 """
-Proxy Tools for Emission Downscaling
-- Enhanced OSM road processing (smooth continuous lines)
-- Improved Urban Atlas land use classification
-- Nighttime Lights from VIIRS
-- Proper integration with emission downscaling
+Enhanced Proxy Tools with Nighttime Lights and Building Height Support
 """
 import os
 import osmnx as ox

@@ -1,4 +1,4 @@
-#with NOx and PM (fine+coarse) speciation
+#with PM fine+coarse
 import numpy as np
 from osgeo import gdal
 import geopandas as gpd
