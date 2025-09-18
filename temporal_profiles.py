@@ -9,6 +9,9 @@ from datetime import datetime, timedelta
 from concurrent.futures import ProcessPoolExecutor
 import warnings
 import sys
+import time
+from functools import lru_cache
+import multiprocessing as mp
 
 # Suppress warnings for cleaner output
 warnings.filterwarnings('ignore')
@@ -37,6 +40,9 @@ class TemporalProfiler:
         self.activity_code_mapping = self._create_activity_code_mapping()
         self._load_profiles()
         self._precompute_timezone_data()
+        
+        # Precompute and cache frequently used data
+        self._precompute_cached_data()
     
     def write(self, text):
         """Write to both console and log file"""
@@ -209,6 +215,32 @@ class TemporalProfiler:
         """Set minimal timezone data since no adjustments are needed"""
         self.is_multi_timezone = False
 
+    def _precompute_cached_data(self):
+        """Precompute and cache frequently used data for faster access"""
+        # Precompute monthly profile lookup dictionaries
+        self.monthly_profile_cache = {}
+        month_cols = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+        
+        for _, row in self.monthly_profiles.iterrows():
+            key = (str(row['country']), int(row['Year']), str(row['IPCC_2006_source_category']))
+            self.monthly_profile_cache[key] = row[month_cols].values.astype(np.float32)
+        
+        # Precompute weekly profile lookup dictionaries
+        self.weekly_profile_cache = {}
+        for _, row in self.weekly_profiles.iterrows():
+            key = (str(row['Country_code_A3']), str(row['activity_code']), int(row['Weekday_id']))
+            self.weekly_profile_cache[key] = float(row['daily_factor'])
+        
+        # Precompute hourly profile lookup dictionaries
+        self.hourly_profile_cache = {}
+        hour_cols = [f'h{h}' for h in range(1, 25)]
+        for _, row in self.hourly_profiles.iterrows():
+            key = (str(row['Country_code_A3']), str(row['activity_code']), int(row['Daytype_id']), int(row['month_id']))
+            if all(col in row.index for col in hour_cols):
+                self.hourly_profile_cache[key] = row[hour_cols].values.astype(np.float32)
+            else:
+                self.hourly_profile_cache[key] = np.ones(24, dtype=np.float32) / 24
+
     def _get_edgar_sector(self, greta_sector):
         """Get corresponding EDGAR sector for GRETA sector"""
         # Use the full GRETA sector name for mapping
@@ -266,7 +298,7 @@ class TemporalProfiler:
         """Return hourly factors without any timezone or DST shift to preserve local time"""
         return hourly_factors
 
-    def _get_time_factors(self, greta_sector, date, lat=None, lon=None):
+    def _get_time_factors(self, greta_sector, date):
         """Get monthly, daily, and hourly factors without timezone adjustments"""
         try:
             activity_codes = self._get_activity_codes(greta_sector)
@@ -275,66 +307,47 @@ class TemporalProfiler:
             month = date.month
             daytype = self._get_daytype(date)
             
-            print(f"Processing {greta_sector} -> Activity: {activity_codes}, Year: {profile_year}, IPCC: {ipcc_categories}")
+            # Get monthly factor using cached lookup
+            monthly_factor_sum = 0.0
+            monthly_count = 0
             
-            # Get monthly factor - check both country codes and use the specified year
-            monthly_filter = (
-                ((self.monthly_profiles['country'] == self.country) | (self.monthly_profiles['country'] == '22') | (self.monthly_profiles['country'] == 22)) &
-                (self.monthly_profiles['Year'] == profile_year) &
-                (self.monthly_profiles['IPCC_2006_source_category'].isin(ipcc_categories))
-            )
+            for ipcc_category in ipcc_categories:
+                key = (self.country, profile_year, ipcc_category)
+                if key in self.monthly_profile_cache:
+                    monthly_values = self.monthly_profile_cache[key]
+                    monthly_factor_sum += monthly_values[month - 1]  # month-1 for 0-based index
+                    monthly_count += 1
             
-            monthly_data = self.monthly_profiles[monthly_filter]
-            month_col = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
-                        'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'][month-1]
-            
-            if not monthly_data.empty:
-                # Average monthly factors across all matching IPCC categories
-                monthly_factor = monthly_data[month_col].mean()
-                ipcc_used = ', '.join(monthly_data['IPCC_2006_source_category'].unique())
-                print(f"  Using IPCC: {ipcc_used}, Monthly factor: {monthly_factor:.6f}")
+            if monthly_count > 0:
+                monthly_factor = monthly_factor_sum / monthly_count
             else:
                 monthly_factor = 1.0 / 12
-                print(f"  Warning: No monthly profile found, using uniform: {monthly_factor:.6f}")
             
-            # Get weekly factor - average across all activity codes
+            # Get weekly factor using cached lookup
             weekly_factors = []
             for activity_code in activity_codes:
-                weekly_data = self.weekly_profiles[
-                    (self.weekly_profiles['activity_code'] == activity_code) &
-                    (self.weekly_profiles['Weekday_id'] == daytype)
-                ]
-                if not weekly_data.empty:
-                    weekly_factors.append(weekly_data['daily_factor'].values[0])
+                key = (self.country, activity_code, daytype)
+                if key in self.weekly_profile_cache:
+                    weekly_factors.append(self.weekly_profile_cache[key])
             
             if weekly_factors:
                 weekly_factor = np.mean(weekly_factors)
-                print(f"  Using activity codes: {activity_codes}, Weekly factor: {weekly_factor:.6f}")
             else:
                 weekly_factor = 1.0 / 7
-                print(f"  Warning: No weekly profile found for {activity_codes}, using uniform: {weekly_factor:.6f}")
             
             # Normalize weekly factors for the month
             days_in_month = calendar.monthrange(date.year, date.month)[1]
-            month_df = pd.DataFrame({
-                'day_in_month': range(1, days_in_month + 1),
-                'Weekday_id': [self._get_daytype(date.replace(day=d)) for d in range(1, days_in_month + 1)]
-            })
+            total_daily_factors = 0.0
             
-            # Calculate sum of daily factors for the entire month
-            total_daily_factors = 0
             for day in range(1, days_in_month + 1):
                 day_date = date.replace(day=day)
                 day_daytype = self._get_daytype(day_date)
                 
                 day_weekly_factors = []
                 for activity_code in activity_codes:
-                    day_weekly_data = self.weekly_profiles[
-                        (self.weekly_profiles['activity_code'] == activity_code) &
-                        (self.weekly_profiles['Weekday_id'] == day_daytype)
-                    ]
-                    if not day_weekly_data.empty:
-                        day_weekly_factors.append(day_weekly_data['daily_factor'].values[0])
+                    key = (self.country, activity_code, day_daytype)
+                    if key in self.weekly_profile_cache:
+                        day_weekly_factors.append(self.weekly_profile_cache[key])
                 
                 if day_weekly_factors:
                     total_daily_factors += np.mean(day_weekly_factors)
@@ -346,29 +359,20 @@ class TemporalProfiler:
             else:
                 weekly_factor = 1.0 / days_in_month
             
-            # Get hourly factors - average across all activity codes
+            # Get hourly factors using cached lookup
             hourly_factors_list = []
             for activity_code in activity_codes:
-                hourly_data = self.hourly_profiles[
-                    (self.hourly_profiles['activity_code'] == activity_code) &
-                    (self.hourly_profiles['Daytype_id'] == daytype) &
-                    (self.hourly_profiles['month_id'] == month)
-                ]
-                
-                if not hourly_data.empty:
-                    hour_cols = [f'h{h}' for h in range(1, 25)]
-                    hourly_factors_list.append(hourly_data[hour_cols].mean(axis=0).values)
+                key = (self.country, activity_code, daytype, month)
+                if key in self.hourly_profile_cache:
+                    hourly_factors_list.append(self.hourly_profile_cache[key])
             
             if hourly_factors_list:
                 hourly_factors = np.mean(hourly_factors_list, axis=0)
                 hourly_factors = self._apply_dst_adjust(hourly_factors, None, date)
-                print(f"  Hourly factors sum: {sum(hourly_factors):.6f}")
             else:
                 hourly_factors = np.ones(24) / 24
-                print(f"  Warning: No hourly profile found for {activity_codes}, using uniform distribution")
             
             annual_weight = monthly_factor * weekly_factor
-            print(f"  Annual weight: {annual_weight:.8f}")
             
             return annual_weight, hourly_factors
             
@@ -376,6 +380,22 @@ class TemporalProfiler:
             print(f"Error getting time factors for {greta_sector}: {str(e)}")
             # Return uniform distribution as fallback
             return 1.0 / (365 * 24), np.ones(24) / 24
+
+    def _precompute_yearly_factors(self, sectors, year):
+        """Precompute yearly factor sums for mass conservation check"""
+        yearly_factor_sums = {}
+        
+        for sector in sectors:
+            total_factor = 0.0
+            for month in range(1, 13):
+                days_in_month = calendar.monthrange(year, month)[1]
+                for day in range(1, days_in_month + 1):
+                    annual_weight, hourly_factors = self._get_time_factors(sector, datetime(year, month, day))
+                    daily_contribution = annual_weight * sum(hourly_factors)
+                    total_factor += daily_contribution
+            yearly_factor_sums[sector] = total_factor
+        
+        return yearly_factor_sums
 
     def _check_mass_conservation(self, input_fn, sectors, year):
         """
@@ -406,9 +426,11 @@ class TemporalProfiler:
                 sector_mass = np.nansum(yearly_emissions[i])
                 yearly_mass[sector] = sector_mass
                 total_yearly_mass += sector_mass
-                print(f"Yearly mass for {sector}: {sector_mass:.6f} kg/m²")
             
             print(f"Total yearly mass: {total_yearly_mass:.6f} kg/m²")
+            
+            # Precompute yearly factor sums for all sectors
+            yearly_factor_sums = self._precompute_yearly_factors(sectors, year)
             
             # Calculate expected mass from temporal disaggregation for entire year
             disaggregated_mass = {}
@@ -416,25 +438,12 @@ class TemporalProfiler:
             
             for i, sector in enumerate(sectors):
                 sector_yearly_emissions = yearly_emissions[i]
-                sector_total = 0.0
-                
-                # Calculate sum of temporal factors for entire year
-                yearly_factor_sum = 0.0
-                for month in range(1, 13):
-                    days_in_month = calendar.monthrange(year, month)[1]
-                    for day in range(1, days_in_month + 1):
-                        current_date = datetime(year, month, day)
-                        annual_weight, hourly_factors = self._get_time_factors(sector, current_date)
-                        daily_contribution = annual_weight * sum(hourly_factors)
-                        yearly_factor_sum += daily_contribution
+                yearly_factor_sum = yearly_factor_sums[sector]
                 
                 # Calculate expected disaggregated mass
                 sector_disaggregated_mass = np.nansum(sector_yearly_emissions) * yearly_factor_sum
                 disaggregated_mass[sector] = sector_disaggregated_mass
                 total_disaggregated_mass += sector_disaggregated_mass
-                
-                print(f"Yearly factor sum for {sector}: {yearly_factor_sum:.8f}")
-                print(f"Disaggregated mass for {sector}: {sector_disaggregated_mass:.6f} kg/m²")
                 
                 # Check mass conservation
                 mass_diff = abs(yearly_mass[sector] - sector_disaggregated_mass)
@@ -500,11 +509,10 @@ class TemporalProfiler:
         
         return output_files, days_per_file
 
-    def _process_day(self, current_date, sectors, yearly_bands, x_size, y_size, lats, lons):
-        """Process a single day's data for all sectors"""
+    def _process_day(self, current_date, sectors, yearly_bands):
+        """Process a single day's data for all sectors - optimized version"""
         band_data = []
         band_descs = []
-        min_max_values = {}
         
         for sec_idx, sec in enumerate(sectors):
             yearly_emis = yearly_bands[sec_idx]
@@ -517,24 +525,18 @@ class TemporalProfiler:
                 hour_str = f"{hour+1:02d}"
                 band_desc = f"{sec}_h{hour_str}_{current_date.strftime('%Y%m%d')}"
                 band_descs.append(band_desc)
-                min_max_values[band_desc] = {
-                    'min': np.nanmin(hour_emis),
-                    'max': np.nanmax(hour_emis),
-                    'mean': np.nanmean(hour_emis)
-                }
         
-        return band_data, band_descs, min_max_values
+        return band_data, band_descs
 
-    def _process_file(self, input_fn, output_fn, sectors, start_date, end_date, x_size, y_size, geotransform, projection, output_files):
-        """Process a single output file"""
+    def _process_file_worker(self, args):
+        """Worker function for processing files - avoids pickling issues"""
+        input_fn, output_fn, sectors, start_date, end_date, x_size, y_size, geotransform, projection, output_files = args
+        
         try:
+            # Load all bands at once for better performance
             ds = gdal.Open(input_fn)
             yearly_bands = [ds.GetRasterBand(i).ReadAsArray() for i in range(1, ds.RasterCount + 1)]
-            
-            lon_start, lon_step = geotransform[0], geotransform[1]
-            lat_start, lat_step = geotransform[3], geotransform[5]
-            lons = np.linspace(lon_start, lon_start + lon_step * (x_size - 1), x_size)
-            lats = np.linspace(lat_start, lat_start + lat_step * (y_size - 1), y_size)
+            ds = None
             
             file_days = (end_date - start_date).days + 1
             file_bands = 24 * len(sectors) * file_days
@@ -542,10 +544,11 @@ class TemporalProfiler:
             print(f"\nCreating {output_fn} with {file_bands} bands "
                   f"({start_date.strftime('%Y-%m-%d')} to {end_date.strftime('%Y-%m-%d')})")
             
+            # Create output file with optimal settings
             driver = gdal.GetDriverByName('GTiff')
             out_ds = driver.Create(
                 output_fn, x_size, y_size, file_bands, gdal.GDT_Float32,
-                options=['COMPRESS=LZW', 'PREDICTOR=2', 'BIGTIFF=YES', 'NUM_THREADS=ALL_CPUS']
+                options=['COMPRESS=LZW', 'PREDICTOR=2', 'BIGTIFF=YES', 'NUM_THREADS=ALL_CPUS', 'TILED=YES']
             )
             out_ds.SetGeoTransform(geotransform)
             out_ds.SetProjection(projection)
@@ -553,18 +556,26 @@ class TemporalProfiler:
             band_idx = 1
             min_max_values = {}
             
-            with tqdm(total=file_days, desc=f"Processing {os.path.basename(output_fn)}") as pbar:
-                current_date = start_date
-                while current_date <= end_date:
-                    band_data, band_descs, day_min_max = self._process_day(
-                        current_date, sectors, yearly_bands, x_size, y_size, lats, lons)
-                    for data, desc in zip(band_data, band_descs):
-                        out_ds.GetRasterBand(band_idx).WriteArray(data)
-                        out_ds.GetRasterBand(band_idx).SetDescription(desc)
-                        min_max_values[desc] = day_min_max[desc]
-                        band_idx += 1
-                    current_date += timedelta(days=1)
-                    pbar.update(1)
+            # Process days sequentially
+            current_date = start_date
+            while current_date <= end_date:
+                band_data, band_descs = self._process_day(current_date, sectors, yearly_bands)
+                
+                # Write all bands for this day at once
+                for i, (data, desc) in enumerate(zip(band_data, band_descs)):
+                    out_ds.GetRasterBand(band_idx + i).WriteArray(data)
+                    out_ds.GetRasterBand(band_idx + i).SetDescription(desc)
+                    
+                    # Only calculate min/max for first and last few bands to save time
+                    if i < 5 or i >= len(band_descs) - 5:
+                        min_max_values[desc] = {
+                            'min': np.nanmin(data),
+                            'max': np.nanmax(data),
+                            'mean': np.nanmean(data)
+                        }
+                
+                band_idx += len(band_data)
+                current_date += timedelta(days=1)
             
             metadata = {
                 'temporal_disaggregation': 'EDGAR_no_timezone_adjustment',
@@ -581,7 +592,6 @@ class TemporalProfiler:
             }
             out_ds.SetMetadata(metadata)
             out_ds = None
-            ds = None
             print(f"Successfully created: {output_fn}")
             return min_max_values
         except Exception as e:
@@ -589,7 +599,7 @@ class TemporalProfiler:
             return None
 
     def _process_temporal_disaggregation(self, input_fn, base_output_fn, sectors, start_date, end_date):
-        """Perform temporal disaggregation with parallel processing"""
+        """Perform temporal disaggregation with sequential processing to avoid pickling issues"""
         try:
             ds = gdal.Open(input_fn)
             if ds is None:
@@ -599,6 +609,7 @@ class TemporalProfiler:
             geotransform = ds.GetGeoTransform()
             x_size, y_size = ds.RasterXSize, ds.RasterYSize
             projection = ds.GetProjection()
+            ds = None
             
             # Perform detailed mass conservation check
             year = start_date.year
@@ -612,16 +623,13 @@ class TemporalProfiler:
                 input_fn, base_output_fn, sectors, start_date, end_date)
             
             min_max_values = {}
-            with ProcessPoolExecutor() as executor:
-                futures = [
-                    executor.submit(self._process_file, input_fn, output_fn, sectors, 
-                                  file_start, file_end, x_size, y_size, geotransform, projection, output_files)
-                    for output_fn, file_start, file_end in output_files
-                ]
-                for future in futures:
-                    result = future.result()
-                    if result:
-                        min_max_values.update(result)
+            
+            # Process files sequentially to avoid pickling issues
+            for output_fn, file_start, file_end in output_files:
+                args = (input_fn, output_fn, sectors, file_start, file_end, x_size, y_size, geotransform, projection, output_files)
+                result = self._process_file_worker(args)
+                if result:
+                    min_max_values.update(result)
             
             print(f"\nTemporal variation for {os.path.basename(base_output_fn)}:")
             for band, values in list(min_max_values.items())[:5] + list(min_max_values.items())[-5:]:
