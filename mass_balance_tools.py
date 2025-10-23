@@ -536,3 +536,4 @@ def calculate_mass_balance(job_parameters, data_parameters, sectors, species):
             if not os.path.exists(pm25_path):
                 missing.append('pm2_5')
             print(f"Warning: Mass-balanced PM files not found: {', '.join(missing)}")
+    print("\n=== Mass Balance Correction Completed ===")

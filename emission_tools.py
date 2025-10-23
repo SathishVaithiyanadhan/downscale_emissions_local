@@ -30,7 +30,7 @@ def bbox_transform(in_crs, out_crs, cell_minx, cell_miny, cell_maxx, cell_maxy, 
     except Exception as e:
         raise ValueError(f"CRS transformation failed: {str(e)}")
 
-def nfr_to_gnfr(job_parameters, gdf_data, sectors):
+'''def nfr_to_gnfr(job_parameters, gdf_data, sectors):
     coln = list(gdf_data.columns)
     src_type = [item[0] for item in sectors]
     col_sum = []
@@ -60,6 +60,87 @@ def nfr_to_gnfr(job_parameters, gdf_data, sectors):
                    'geometry'] + col_sum
     else:
         col_out = ['ID_RASTER_left', 'geometry'] + col_sum
+    
+    return gdf_data[col_out].drop_duplicates()'''
+def nfr_to_gnfr(job_parameters, gdf_data, sectors):
+    coln = list(gdf_data.columns)
+    src_type = [item[0] for item in sectors]
+    col_sum = []
+    
+    # DEBUG: Print what columns we actually have
+    print(f"DEBUG: Available columns in data ({len(coln)} total):")
+    print(f"  First 10: {coln[:10]}")
+    print(f"  ID columns found: {[col for col in coln if 'ID' in col or 'id' in col]}")
+    
+    # DEBUG: Check for emission columns
+    emission_cols = [col for col in coln if col.startswith('E_')]
+    print(f"  Emission columns found: {len(emission_cols)}")
+    
+    for spec in job_parameters['species']:
+        spec_upper = spec.upper()
+        print(f"\nDEBUG: Processing species: {spec_upper}")
+        
+        for sec in src_type:
+            sidx = src_type.index(sec)
+            subsec = sectors[sidx][1:]
+            
+            # Look for emission columns for this sector and species
+            gfd = []
+            for n in subsec:
+                expected_col = f'E_{n}_{spec_upper}'
+                if expected_col in coln:
+                    gfd.append(expected_col)
+            
+            print(f"  Sector {sec}: Looking for {len(subsec)} NFR codes, found {len(gfd)} emission columns")
+            
+            if gfd:
+                # Fill NaN values and sum
+                for col in gfd:
+                    gdf_data[col] = gdf_data[col].fillna(0)
+                gdf_data[sec + '_' + spec] = gdf_data[gfd].sum(axis=1)
+                col_sum.append(sec + '_' + spec)
+                
+                # Check if we have non-zero emissions
+                total_emissions = gdf_data[sec + '_' + spec].sum()
+                print(f"    Total emissions for {sec}_{spec}: {total_emissions}")
+            else:
+                gdf_data[sec + '_' + spec] = 0.0
+                col_sum.append(sec + '_' + spec)
+                print(f"    No emissions found for {sec}_{spec}")
+    
+    # Handle PM10 including PM2.5 if needed
+    if 'pm10' in job_parameters['species']:
+        for sec in src_type:
+            pm10_col = sec + '_pm10'
+            pm25_col = sec + '_pm2_5'
+            if pm10_col in gdf_data.columns and pm25_col in gdf_data.columns:
+                gdf_data[pm10_col] += gdf_data[pm25_col]
+                print(f"DEBUG: Added PM2.5 to PM10 for sector {sec}")
+    
+    # Build output columns - FIXED VERSION
+    col_out = []
+    
+    # Add geometry first (always required for GeoDataFrame)
+    col_out.append('geometry')
+    
+    # Add the summed emission columns
+    col_out.extend(col_sum)
+    
+    # Try to add an ID column if available
+    possible_id_cols = ['ID_RASTER', 'plant_id', 'OBJECTID', 'id']  # Removed ID_RASTER_left
+    for id_col in possible_id_cols:
+        if id_col in gdf_data.columns:
+            col_out.insert(0, id_col)  # Add ID at the beginning
+            print(f"DEBUG: Added ID column: {id_col}")
+            break
+    
+    # Final check: ensure all output columns exist
+    missing_cols = [col for col in col_out if col not in gdf_data.columns]
+    if missing_cols:
+        print(f"WARNING: Missing columns in output: {missing_cols}")
+        col_out = [col for col in col_out if col in gdf_data.columns]
+    
+    print(f"DEBUG: Final output columns ({len(col_out)}): {col_out}")
     
     return gdf_data[col_out].drop_duplicates()
 
@@ -106,7 +187,7 @@ def clean_emission_array(array, building_mask=None):
     
     return cleaned
 
-def prep_greta_data(data_parameters, job_parameters, sectors):
+'''def prep_greta_data(data_parameters, job_parameters, sectors):
     bbox_grid = [
         job_parameters['min_lon'],
         job_parameters['min_lat'],
@@ -123,16 +204,22 @@ def prep_greta_data(data_parameters, job_parameters, sectors):
         raise ValueError(f"Bounding box transformation failed: {str(e)}")
 
     try:
-        prtr1_greta = gpd.read_file(data_parameters['emiss_dir'], layer=2, bbox=bbox_greta)
-        prtr2_greta = gpd.read_file(data_parameters['emiss_dir'], layer=3, bbox=bbox_greta)
+        prtr1_greta = gpd.read_file(data_parameters['emiss_dir'], layer=0, bbox=bbox_greta)
+        prtr2_greta = gpd.read_file(data_parameters['emiss_dir'], layer=1, bbox=bbox_greta)
         prtr_greta = gpd.sjoin(prtr1_greta, prtr2_greta, how="left", predicate="intersects")
     except Exception as e:
         raise RuntimeError(f"Failed to load PRTR data: {str(e)}")
 
     try:
-        rast1_greta = gpd.read_file(data_parameters['emiss_dir'], layer=0, bbox=bbox_greta)
-        rast2_greta = gpd.read_file(data_parameters['emiss_dir'], layer=1, bbox=bbox_greta)
-        rast_greta = gpd.sjoin(rast1_greta, rast2_greta, how="left", predicate="intersects")
+        rast1_greta = gpd.read_file(data_parameters['emiss_dir'], layer=2, bbox=bbox_greta)
+        rast2_greta = gpd.read_file(data_parameters['emiss_dir'], layer=3, bbox=bbox_greta)
+        rast3_greta = gpd.read_file(data_parameters['emiss_dir'], layer=4, bbox=bbox_greta)
+
+        #rast_greta = gpd.sjoin(rast1_greta, rast2_greta,  how="left", predicate="intersects")
+        rast_greta_temp = gpd.sjoin(rast1_greta, rast2_greta, how="left", predicate="intersects")
+        
+        # Then join the result with rast3
+        rast_greta = gpd.sjoin(rast_greta_temp, rast3_greta, how="left", predicate="intersects")
     except Exception as e:
         raise RuntimeError(f"Failed to load raster data: {str(e)}")
 
@@ -159,6 +246,85 @@ def prep_greta_data(data_parameters, job_parameters, sectors):
             
             if col_name in gdf_prtr.columns:
                 gdf_prtr[col_name] *= g_to_kg
+            
+            if col_name in gdf_grid.columns:
+                gdf_grid[col_name] = gdf_grid[col_name] * conversion_factor
+
+    return gdf_grid, bbox_grid, bbox_epsg'''
+def prep_greta_data(data_parameters, job_parameters, sectors):
+    bbox_grid = [
+        job_parameters['min_lon'],
+        job_parameters['min_lat'],
+        job_parameters['max_lon'],
+        job_parameters['max_lat']
+    ]
+    bbox_epsg = str(job_parameters['epsg_code'])
+    
+    try:
+        bbox_greta = tuple(bbox_transform(25832, job_parameters['epsg_code'],
+                                        job_parameters['min_lon'], job_parameters['min_lat'],
+                                        job_parameters['max_lon'], job_parameters['max_lat']))
+    except Exception as e:
+        raise ValueError(f"Bounding box transformation failed: {str(e)}")
+
+    try:
+        prtr1_greta = gpd.read_file(data_parameters['emiss_dir'], layer=0, bbox=bbox_greta)
+        prtr2_greta = gpd.read_file(data_parameters['emiss_dir'], layer=1, bbox=bbox_greta)
+        prtr_greta = gpd.sjoin(prtr1_greta, prtr2_greta, how="left", predicate="intersects")
+    except Exception as e:
+        raise RuntimeError(f"Failed to load PRTR data: {str(e)}")
+
+    try:
+        # Load all three raster parts
+        rast1_greta = gpd.read_file(data_parameters['emiss_dir'], layer=2, bbox=bbox_greta)
+        rast2_greta = gpd.read_file(data_parameters['emiss_dir'], layer=3, bbox=bbox_greta)
+        rast3_greta = gpd.read_file(data_parameters['emiss_dir'], layer=4, bbox=bbox_greta)
+        
+        # Use merge instead of sjoin for raster data (more efficient for same geometries)
+        # First, reset indices to avoid index conflicts
+        rast1_greta = rast1_greta.reset_index(drop=True)
+        rast2_greta = rast2_greta.reset_index(drop=True)
+        rast3_greta = rast3_greta.reset_index(drop=True)
+        
+        # Merge based on index since they should have the same geometries in same order
+        rast_greta = rast1_greta.copy()
+        
+        # Add columns from rast2_greta (excluding geometry)
+        rast2_cols = [col for col in rast2_greta.columns if col != 'geometry']
+        for col in rast2_cols:
+            rast_greta[col] = rast2_greta[col]
+        
+        # Add columns from rast3_greta (excluding geometry)
+        rast3_cols = [col for col in rast3_greta.columns if col != 'geometry']
+        for col in rast3_cols:
+            rast_greta[col] = rast3_greta[col]
+            
+    except Exception as e:
+        raise RuntimeError(f"Failed to load raster data: {str(e)}")
+
+    gdf_prtr = nfr_to_gnfr(job_parameters, prtr_greta, sectors)
+    gdf_grid = nfr_to_gnfr(job_parameters, rast_greta, sectors)
+    
+    try:
+        gdf_prtr.drop('geometry', axis=1).to_csv(
+            os.path.join(job_parameters['job_path'], 'point_sources.csv'),
+            index=False
+        )
+    except Exception as e:
+        print(f"Warning: Could not save point sources: {str(e)}")
+
+    gdf_grid['area_km2'] = gdf_grid.geometry.area / 1e6
+    
+    gg_to_kg = 1e6
+    km2_to_m2 = 1e6
+    conversion_factor = gg_to_kg / km2_to_m2
+
+    for spec in job_parameters['species']:
+        for sec in [s[0] for s in sectors]:
+            col_name = f"{sec}_{spec}"
+            
+            if col_name in gdf_prtr.columns:
+                gdf_prtr[col_name] *= gg_to_kg
             
             if col_name in gdf_grid.columns:
                 gdf_grid[col_name] = gdf_grid[col_name] * conversion_factor
