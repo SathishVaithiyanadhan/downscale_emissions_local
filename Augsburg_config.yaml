@@ -1,4 +1,4 @@
-#Temporal_Working
+
 #Data Directories
 data_settings:
   #emiss_dir: /home/vaithisa/Input_data/UniAugsburg_2018_Sub2020_Inlandsprinzip_Greta1.1.4.gdb
@@ -12,21 +12,22 @@ data_settings:
 
 # Simulation parameters
 job_settings:
-  job_path: /mnt/t/PhD_data/Downscale_Augsburg_full_100m #/mnt/t/PhD_data/Downscale_Augsburg_full_100m #Small_area_Emissions_Yearly  #/mnt/c/Users/vaithisa/PHD_Augsburg/Downscale_Winter_Bigarea
+  job_path: /mnt/t/PhD_data/Downscale_Augsburg_082024  #/mnt/t/PhD_data/Downscale_Augsburg_center_10m_11082024 #/mnt/t/PhD_data/Downscale_Augsburg_2024 
+  #/mnt/t/PhD_data/Downscale_Augsburg_full_100m #Small_area_Emissions_Yearly  #/mnt/c/Users/vaithisa/PHD_Augsburg/Downscale_Winter_Bigarea
   job_name: test
   #min_lon: 642600 #Augsburg_random small area
   #max_lon: 643170 
   #min_lat: 5357800 
   #max_lat: 5358400 
-  #min_lon: 638000 #636000 #Augsburg_center_domain
-  #max_lon: 644000 #646000
-  #min_lat: 5356000 #5350000
-  #max_lat: 5362000 #5365000
-  min_lon: 634000  #Augsburg_full_domain
-  max_lon: 649000
-  min_lat: 5345000
-  max_lat: 5373000
-  resol: 100
+  min_lon: 638000 #636000 #Augsburg_center_domain
+  max_lon: 644000 #646000
+  min_lat: 5356000 #5350000
+  max_lat: 5362000 #5365000
+  #min_lon: 634000  #Augsburg_full_domain
+  #max_lon: 649000
+  #min_lat: 5345000
+  #max_lat: 5373000
+  resol: 10
   epsg_code: 25832
   #species: [pm10]
   species: [n2o, nmvoc, so2, co, pm10, pm2_5, nh3, pb, cd, hg, as, ni, bc, co2, ch4, nox]
@@ -34,8 +35,8 @@ job_settings:
   inventory: GRETA
   temporal:
     apply_temporal: true
-    start_date: "2025-02-03"
-    end_date: "2025-02-03"
+    start_date: "2024-08-11 00:00:00"
+    end_date: "2024-08-15 23:00:00"
     country: "DEU"    # Will automatically include country code 22
     profile_year: 2017
   pm_speciation:

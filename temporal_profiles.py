@@ -1,3 +1,4 @@
+###simple hno3, rcho, ho2, ro2, oh, h2o added
 #mass conservation check
 import numpy as np
 import pandas as pd
@@ -32,6 +33,9 @@ class TemporalProfiler:
         
         self.country = job_parameters['temporal']['country']
         self.profile_year = job_parameters['temporal']['profile_year']
+        
+        # Store job parameters for later use
+        self.job_parameters = job_parameters
         
         # Preload all data to avoid repeated loading
         self.sector_mapping = self._load_sector_mapping(data_parameters['greta_to_edgar'])
@@ -299,7 +303,7 @@ class TemporalProfiler:
         return hourly_factors
 
     def _get_time_factors(self, greta_sector, date):
-        """Get monthly, daily, and hourly factors without timezone adjustments"""
+        """Get monthly, daily, and hourly factors without timezone adjustments - ORIGINAL METHOD"""
         try:
             activity_codes = self._get_activity_codes(greta_sector)
             profile_year = self._get_profile_year(greta_sector)
@@ -382,7 +386,7 @@ class TemporalProfiler:
             return 1.0 / (365 * 24), np.ones(24) / 24
 
     def _precompute_yearly_factors(self, sectors, year):
-        """Precompute yearly factor sums for mass conservation check"""
+        """Precompute yearly factor sums for mass conservation check - ORIGINAL METHOD"""
         yearly_factor_sums = {}
         
         for sector in sectors:
@@ -390,17 +394,18 @@ class TemporalProfiler:
             for month in range(1, 13):
                 days_in_month = calendar.monthrange(year, month)[1]
                 for day in range(1, days_in_month + 1):
-                    annual_weight, hourly_factors = self._get_time_factors(sector, datetime(year, month, day))
-                    daily_contribution = annual_weight * sum(hourly_factors)
-                    total_factor += daily_contribution
+                    date = datetime(year, month, day)
+                    annual_weight, hourly_factors = self._get_time_factors(sector, date)
+                    # Sum over all hours in the day
+                    daily_sum = np.sum(hourly_factors)
+                    total_factor += annual_weight * daily_sum
             yearly_factor_sums[sector] = total_factor
         
         return yearly_factor_sums
 
     def _check_mass_conservation(self, input_fn, sectors, year):
         """
-        Verify mass conservation by comparing input yearly emissions with
-        sum of temporally disaggregated emissions for the entire year
+        ORIGINAL MASS CONSERVATION CHECK - Verify mass conservation for entire year
         """
         try:
             # Load input yearly emissions
@@ -450,9 +455,9 @@ class TemporalProfiler:
                 mass_rel_diff = mass_diff / yearly_mass[sector] * 100 if yearly_mass[sector] > 0 else 0
                 
                 if mass_rel_diff < 0.1:  # 0.1% tolerance
-                    print(f"✓ Mass conserved for {sector}: {mass_rel_diff:.4f}% difference")
+                    print(f" Mass conserved for {sector}: {mass_rel_diff:.4f}% difference")
                 else:
-                    print(f"✗ Mass conservation warning for {sector}: {mass_rel_diff:.4f}% difference")
+                    print(f" Mass conservation warning for {sector}: {mass_rel_diff:.4f}% difference")
             
             # Check total mass conservation
             total_mass_diff = abs(total_yearly_mass - total_disaggregated_mass)
@@ -464,10 +469,10 @@ class TemporalProfiler:
             print(f"Total relative difference: {total_mass_rel_diff:.4f}%")
             
             if total_mass_rel_diff < 0.1:
-                print("✓ Total mass conservation verified")
+                print("Total mass conservation verified")
                 return True
             else:
-                print("✗ Total mass conservation warning")
+                print("Total mass conservation warning")
                 return False
                 
         except Exception as e:
@@ -475,62 +480,69 @@ class TemporalProfiler:
             return False
 
     def _create_output_files(self, input_fn, base_output_fn, sectors, start_date, end_date, max_bands_per_file=60000):
-        """Create output file structure"""
-        total_days = (end_date - start_date).days + 1
-        bands_per_day = 24 * len(sectors)
-        total_bands = bands_per_day * total_days
+        """Create output file structure for partial day processing"""
+        # Calculate total hours in the time period
+        total_hours = int((end_date - start_date).total_seconds() / 3600) + 1
+        bands_per_hour = len(sectors)
+        total_bands = bands_per_hour * total_hours
         
         # Determine if splitting is needed based on band count
         if total_bands <= max_bands_per_file:
             # Use single file without part suffix
             output_files = [(base_output_fn, start_date, end_date)]
-            days_per_file = total_days
-            print(f"\nCreating single output file with {total_bands} bands")
+            hours_per_file = total_hours
+            print(f"\nCreating single output file with {total_bands} bands for {total_hours} hours")
         else:
             # Split into multiple files with part suffix
             num_files = (total_bands + max_bands_per_file - 1) // max_bands_per_file
             bands_per_file = (total_bands + num_files - 1) // num_files
-            days_per_file = max(bands_per_file // bands_per_day, 1)
+            hours_per_file = max(bands_per_file // bands_per_hour, 1)
             print(f"\nSplitting output into {num_files} files with max {bands_per_file} bands each")
             
             output_files = []
-            current_date = start_date
+            current_datetime = start_date
             file_index = 1
             
-            while current_date <= end_date:
-                file_start_date = current_date
-                file_end_date = current_date + timedelta(days=days_per_file - 1)
-                if file_end_date > end_date:
-                    file_end_date = end_date
+            while current_datetime <= end_date:
+                file_start_datetime = current_datetime
+                file_end_datetime = current_datetime + timedelta(hours=hours_per_file - 1)
+                if file_end_datetime > end_date:
+                    file_end_datetime = end_date
                 output_fn = f"{base_output_fn[:-4]}_part{file_index:02d}.tif"
-                output_files.append((output_fn, file_start_date, file_end_date))
-                current_date = file_end_date + timedelta(days=1)
+                output_files.append((output_fn, file_start_datetime, file_end_datetime))
+                current_datetime = file_end_datetime + timedelta(hours=1)
                 file_index += 1
         
-        return output_files, days_per_file
+        return output_files, hours_per_file
 
-    def _process_day(self, current_date, sectors, yearly_bands):
-        """Process a single day's data for all sectors - optimized version"""
+    def _process_hour(self, current_datetime, sectors, yearly_bands, year):
+        """Process a single hour's data for all sectors - ORIGINAL APPROACH"""
         band_data = []
         band_descs = []
         
         for sec_idx, sec in enumerate(sectors):
             yearly_emis = yearly_bands[sec_idx]
-            annual_weight, hourly_factors_base = self._get_time_factors(sec, current_date)
+            hour = current_datetime.hour
             
-            daily_emis = yearly_emis * annual_weight
-            for hour in range(24):
-                hour_emis = daily_emis * hourly_factors_base[hour]
-                band_data.append(hour_emis)
-                hour_str = f"{hour+1:02d}"
-                band_desc = f"{sec}_h{hour_str}_{current_date.strftime('%Y%m%d')}"
-                band_descs.append(band_desc)
+            # Get factors for this specific date and hour - ORIGINAL APPROACH
+            date_for_factors = current_datetime.replace(hour=0, minute=0, second=0, microsecond=0)
+            annual_weight, hourly_factors = self._get_time_factors(sec, date_for_factors)
+            
+            # Calculate hourly emissions using the specific hour's factor
+            hourly_factor = hourly_factors[hour]
+            hour_emis = yearly_emis * annual_weight * hourly_factor
+            
+            band_data.append(hour_emis)
+            hour_str = f"{hour:02d}"
+            # Clean band description: A_PublicPower_h22_20240811 (no redundant hour info)
+            band_desc = f"{sec}_h{hour_str}_{current_datetime.strftime('%Y%m%d')}"
+            band_descs.append(band_desc)
         
         return band_data, band_descs
 
     def _process_file_worker(self, args):
         """Worker function for processing files - avoids pickling issues"""
-        input_fn, output_fn, sectors, start_date, end_date, x_size, y_size, geotransform, projection, output_files = args
+        input_fn, output_fn, sectors, start_datetime, end_datetime, x_size, y_size, geotransform, projection, output_files, year = args
         
         try:
             # Load all bands at once for better performance
@@ -538,11 +550,12 @@ class TemporalProfiler:
             yearly_bands = [ds.GetRasterBand(i).ReadAsArray() for i in range(1, ds.RasterCount + 1)]
             ds = None
             
-            file_days = (end_date - start_date).days + 1
-            file_bands = 24 * len(sectors) * file_days
+            # Calculate total hours in this file
+            file_hours = int((end_datetime - start_datetime).total_seconds() / 3600) + 1
+            file_bands = len(sectors) * file_hours
             
             print(f"\nCreating {output_fn} with {file_bands} bands "
-                  f"({start_date.strftime('%Y-%m-%d')} to {end_date.strftime('%Y-%m-%d')})")
+                  f"({start_datetime.strftime('%Y-%m-%d %H:%M:%S')} to {end_datetime.strftime('%Y-%m-%d %H:%M:%S')})")
             
             # Create output file with optimal settings
             driver = gdal.GetDriverByName('GTiff')
@@ -556,12 +569,12 @@ class TemporalProfiler:
             band_idx = 1
             min_max_values = {}
             
-            # Process days sequentially
-            current_date = start_date
-            while current_date <= end_date:
-                band_data, band_descs = self._process_day(current_date, sectors, yearly_bands)
+            # Process hours sequentially
+            current_datetime = start_datetime
+            while current_datetime <= end_datetime:
+                band_data, band_descs = self._process_hour(current_datetime, sectors, yearly_bands, year)
                 
-                # Write all bands for this day at once
+                # Write all bands for this hour at once
                 for i, (data, desc) in enumerate(zip(band_data, band_descs)):
                     out_ds.GetRasterBand(band_idx + i).WriteArray(data)
                     out_ds.GetRasterBand(band_idx + i).SetDescription(desc)
@@ -570,36 +583,23 @@ class TemporalProfiler:
                     if i < 5 or i >= len(band_descs) - 5:
                         min_max_values[desc] = {
                             'min': np.nanmin(data),
-                            'max': np.nanmax(data),
-                            'mean': np.nanmean(data)
+                            'max': np.nanmax(data)
                         }
                 
-                band_idx += len(band_data)
-                current_date += timedelta(days=1)
+                band_idx += len(sectors)
+                current_datetime += timedelta(hours=1)
             
-            metadata = {
-                'temporal_disaggregation': 'EDGAR_no_timezone_adjustment',
-                'temporal_status': 'Hourly',
-                'start_date': start_date.strftime('%Y-%m-%d'),
-                'end_date': end_date.strftime('%Y-%m-%d'),
-                'country': self.country,
-                'profile_year': str(self.profile_year),
-                'total_days': str(file_days),
-                'total_bands': str(file_bands),
-                'band_organization': 'sector_hourly_daily',
-                'file_part': f"{output_files.index((output_fn, start_date, end_date)) + 1} of {len(output_files)}",
-                'original_filename': os.path.basename(output_fn)
-            }
-            out_ds.SetMetadata(metadata)
+            out_ds.FlushCache()
             out_ds = None
-            print(f"Successfully created: {output_fn}")
-            return min_max_values
+            
+            return output_fn, min_max_values, True
+            
         except Exception as e:
-            print(f"Error processing {output_fn}: {str(e)}")
-            return None
+            print(f"Error processing file {output_fn}: {str(e)}")
+            return output_fn, {}, False
 
     def _process_temporal_disaggregation(self, input_fn, base_output_fn, sectors, start_date, end_date):
-        """Perform temporal disaggregation with sequential processing to avoid pickling issues"""
+        """Perform temporal disaggregation with sequential processing - ORIGINAL APPROACH"""
         try:
             ds = gdal.Open(input_fn)
             if ds is None:
@@ -611,67 +611,188 @@ class TemporalProfiler:
             projection = ds.GetProjection()
             ds = None
             
-            # Perform detailed mass conservation check
+            # Perform detailed mass conservation check for ENTIRE YEAR - ORIGINAL APPROACH
             year = start_date.year
-            print(f"\n=== Performing Detailed Mass Conservation Check ===")
+            print(f"\n=== Performing Detailed Mass Conservation Check (Full Year) ===")
             mass_conserved = self._check_mass_conservation(input_fn, sectors, year)
             
             if not mass_conserved:
-                print("Warning: Mass conservation check failed!")
+                print("Warning: Mass conservation check failed! Proceeding anyway...")
             
-            output_files, days_per_file = self._create_output_files(
+            output_files, hours_per_file = self._create_output_files(
                 input_fn, base_output_fn, sectors, start_date, end_date)
             
             min_max_values = {}
+            successful_files = []
             
             # Process files sequentially to avoid pickling issues
             for output_fn, file_start, file_end in output_files:
-                args = (input_fn, output_fn, sectors, file_start, file_end, x_size, y_size, geotransform, projection, output_files)
+                args = (input_fn, output_fn, sectors, file_start, file_end, x_size, y_size, 
+                       geotransform, projection, output_files, year)
                 result = self._process_file_worker(args)
-                if result:
-                    min_max_values.update(result)
+                if result[2]:  # Success
+                    successful_files.append(result[0])
+                    min_max_values.update(result[1])
             
             print(f"\nTemporal variation for {os.path.basename(base_output_fn)}:")
-            for band, values in list(min_max_values.items())[:5] + list(min_max_values.items())[-5:]:
-                print(f"{band}: min={values['min']:.9f}, max={values['max']:.9f}, mean={values['mean']:.9f}")
+            sample_keys = list(min_max_values.keys())[:5]  # Show first 5
+            for key in sample_keys:
+                values = min_max_values[key]
+                print(f"{key}: min={values['min']:.9f}, max={values['max']:.9f}")
             
             # Add mass conservation status to output
             if mass_conserved:
-                print("Mass conservation verified")
+                print(" Mass conservation verified")
             else:
-                print("Mass conservation warnings present")
+                print(" Mass conservation warnings present")
             
             return True
         except Exception as e:
             print(f"Error processing {input_fn}: {str(e)}")
             return False
 
+    def _create_empty_temporal_file(self, job_parameters, species_name, sectors, start_date, end_date):
+        """Create empty temporal disaggregation files for zero-emission species"""
+        print(f"\nCreating empty temporal file for {species_name.upper()}")
+        
+        # Check if yearly file exists
+        yearly_fn = os.path.join(job_parameters['job_path'], f'emission_{species_name}_yearly.tif')
+        if not os.path.exists(yearly_fn):
+            print(f"Warning: Yearly file not found for {species_name}: {yearly_fn}")
+            return False
+        
+        try:
+            # Open yearly file to get spatial properties
+            ds = gdal.Open(yearly_fn)
+            if ds is None:
+                print(f"Error: Could not open yearly file {yearly_fn}")
+                return False
+                
+            geotransform = ds.GetGeoTransform()
+            x_size, y_size = ds.RasterXSize, ds.RasterYSize
+            projection = ds.GetProjection()
+            num_bands = ds.RasterCount
+            ds = None
+            
+            # Create output temporal file
+            temporal_fn = os.path.join(job_parameters['job_path'], f'emission_{species_name}_temporal.tif')
+            
+            # Calculate total hours in the time period
+            total_hours = int((end_date - start_date).total_seconds() / 3600) + 1
+            total_bands = num_bands * total_hours
+            
+            print(f"Creating empty temporal file with {total_bands} bands for {total_hours} hours")
+            
+            # Create output file with zero values
+            driver = gdal.GetDriverByName('GTiff')
+            out_ds = driver.Create(
+                temporal_fn, x_size, y_size, total_bands, gdal.GDT_Float32,
+                options=['COMPRESS=LZW', 'PREDICTOR=2', 'BIGTIFF=YES', 'NUM_THREADS=ALL_CPUS', 'TILED=YES']
+            )
+            out_ds.SetGeoTransform(geotransform)
+            out_ds.SetProjection(projection)
+            
+            # Fill all bands with zeros
+            zero_array = np.zeros((y_size, x_size), dtype=np.float32)
+            
+            band_idx = 1
+            current_datetime = start_date
+            
+            while current_datetime <= end_date:
+                for sec_idx, sec in enumerate(sectors):
+                    for hour in range(24):
+                        # Only create bands for the current hour in the loop
+                        if current_datetime.hour == hour:
+                            out_ds.GetRasterBand(band_idx).WriteArray(zero_array)
+                            hour_str = f"{hour:02d}"
+                            band_desc = f"{sec}_h{hour_str}_{current_datetime.strftime('%Y%m%d')}"
+                            out_ds.GetRasterBand(band_idx).SetDescription(band_desc)
+                            band_idx += 1
+                
+                current_datetime += timedelta(hours=1)
+            
+            # Add metadata
+            metadata = {
+                'temporal_disaggregation': 'Zero_values_no_temporal_profile',
+                'temporal_status': 'Hourly',
+                'start_date': start_date.strftime('%Y-%m-%d %H:%M:%S'),
+                'end_date': end_date.strftime('%Y-%m-%d %H:%M:%S'),
+                'country': self.country,
+                'profile_year': str(self.profile_year),
+                'total_hours': str(total_hours),
+                'total_bands': str(total_bands),
+                'band_organization': 'sector_hourly_daily',
+                'notes': f'Zero values for {species_name.upper()} - created automatically'
+            }
+            out_ds.SetMetadata(metadata)
+            out_ds = None
+            
+            print(f" Successfully created empty temporal file: {temporal_fn}")
+            return True
+            
+        except Exception as e:
+            print(f"Error creating empty temporal file for {species_name}: {str(e)}")
+            return False
+
     def apply_temporal_profiles(self, job_parameters, sectors):
-        """Apply temporal profiles to downscaled emissions"""
+        """Apply temporal profiles to downscaled emissions - MAIN ENTRY POINT"""
         print('\n=== Starting Temporal Disaggregation ===')
         
         main_sectors = [item[0] for item in sectors]
-        start_date = datetime.strptime(job_parameters['temporal']['start_date'], "%Y-%m-%d")
-        end_date = datetime.strptime(job_parameters['temporal']['end_date'], "%Y-%m-%d")
         
-        total_days = (end_date - start_date).days + 1
-        total_bands = 24 * len(main_sectors) * total_days
-        print(f"\nTotal bands needed: {total_bands} (will be split into multiple files if needed)")
+        # Parse datetime strings from config
+        start_date = datetime.strptime(job_parameters['temporal']['start_date'], "%Y-%m-%d %H:%M:%S")
+        end_date = datetime.strptime(job_parameters['temporal']['end_date'], "%Y-%m-%d %H:%M:%S")
         
+        total_hours = int((end_date - start_date).total_seconds() / 3600) + 1
+        total_bands = len(main_sectors) * total_hours
+        
+        print(f"\nTemporal period: {start_date.strftime('%Y-%m-%d %H:%M:%S')} to {end_date.strftime('%Y-%m-%d %H:%M:%S')}")
+        print(f"Total hours: {total_hours}")
+        print(f"Total bands needed: {total_bands} (will be split into multiple files if needed)")
+        
+        # AUTO-ADD species if NOx is present (to ensure they get processed)
         species_to_process = job_parameters['species'].copy()
         
         if 'nox' in species_to_process:
+            # Add standard NOx-related species
             if 'no' not in species_to_process: species_to_process.append('no')
             if 'no2' not in species_to_process: species_to_process.append('no2')
             if 'o3' not in species_to_process: species_to_process.append('o3')
+            
+            # Add the new NOx-related chemical species
+            additional_nox_species = ['hno3', 'rcho', 'ho2', 'ro2', 'oh', 'h2o']
+            for species_name in additional_nox_species:
+                if species_name not in species_to_process:
+                    print(f"Auto-adding {species_name} to temporal processing list")
+                    species_to_process.append(species_name)
         
         if 'pm2_5' in species_to_process and 'pm10' in species_to_process:
-            pm_components = ['EC', 'OC', 'SO4', 'Na', 'OthMin']
+            pm_components = ['ec', 'oc', 'so4', 'na', 'othmin']
             for comp in pm_components:
                 if comp.lower() not in species_to_process:
                     species_to_process.append(comp.lower())
         
+        # First, process zero-emission species (create empty temporal files)
+        zero_species = ['o3', 'hno3', 'rcho', 'ho2', 'ro2', 'oh', 'h2o']
+        for spec in zero_species:
+            if spec in species_to_process:
+                yearly_fn = os.path.join(job_parameters['job_path'], f'emission_{spec}_yearly.tif')
+                if os.path.exists(yearly_fn):
+                    success = self._create_empty_temporal_file(job_parameters, spec, main_sectors, start_date, end_date)
+                    if success:
+                        print(f" Created temporal file for {spec}")
+                    else:
+                        print(f" Failed to create temporal file for {spec}")
+                else:
+                    print(f"Warning: Yearly file not found for zero-emission species {spec}")
+        
+        # Then process regular species with temporal disaggregation
         for spec in tqdm(species_to_process, desc="Processing species"):
+            # Skip zero-emission species that were already processed
+            if spec.lower() in zero_species:
+                continue
+                
             if spec in ['no', 'no2'] and 'nox' not in job_parameters['species']:
                 continue
             if spec in ['ec', 'oc', 'so4', 'na', 'othmin'] and 'pm2_5' not in job_parameters['species']:
@@ -684,6 +805,12 @@ class TemporalProfiler:
                 print(f"Warning: Input file not found: {input_fn}")
                 continue
             
-            self._process_temporal_disaggregation(input_fn, base_output_fn, main_sectors, start_date, end_date)
+            print(f"\nProcessing {spec}...")
+            success = self._process_temporal_disaggregation(input_fn, base_output_fn, main_sectors, start_date, end_date)
+            
+            if success:
+                print(f" Successfully processed {spec}")
+            else:
+                print(f" Failed to process {spec}")
                 
         print("\n=== Mass Conserved downscaling of GRETA emissions with Temporal Disaggregation Completed ===")

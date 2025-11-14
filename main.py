@@ -20,7 +20,7 @@ def main():
             ['G_Shipping', '1A3di_ii','1A3dii'],
             ['H_Aviation', '1A3ai_i','1A3aii_i'],
             ['I_OffRoad', '1A2gvii','1A3c','1A3ei','1A3eii','1A4aii','1A4bii','1A4cii','1A4ciii','1A5b'],
-            ['J_Waste', '5B1','5B2','5C1a','5C1bi','5C1bii','5C1biii','5C1biv','5C1bv','5C1bvi','5C2','5D1','5D2','5D3','5E'],
+            ['J_Waste', '5B1','5B2','5C1a','5C1bi','5C1bii','5C1biii','5C1bv','5C1bvi','5C2','5D1','5D2','5D3','5E'],
             ['K_AgriLivestock', '3B1a','3B1b','3B2','3B3','3B4a','3B4d','3B4e','3B4f','3B4gi','3B4gii','3B4giii','3B4giv','3B4h'],
             ['L_AgriOther','3Da1','3Da2a','3Da2b','3Da2c','3Da3','3Da4','3Db','3Dc','3Dd','3De','3Df','3F','3I'],
             ['SumAllSectors', 'SUM']]

@@ -1,3 +1,4 @@
+#### simple hno3, rcho, ho2, ro2, oh, h2o added
 #Downscale emissions from coarse to fine resolution using proxy data
 import os
 import numpy as np
@@ -30,38 +31,6 @@ def bbox_transform(in_crs, out_crs, cell_minx, cell_miny, cell_maxx, cell_maxy, 
     except Exception as e:
         raise ValueError(f"CRS transformation failed: {str(e)}")
 
-'''def nfr_to_gnfr(job_parameters, gdf_data, sectors):
-    coln = list(gdf_data.columns)
-    src_type = [item[0] for item in sectors]
-    col_sum = []
-    
-    for spec in job_parameters['species']:
-        for sec in src_type:
-            sidx = src_type.index(sec)
-            subsec = sectors[sidx][1:]
-            gfd = [f'E_{n}_{spec.upper()}' for n in subsec if f'E_{n}_{spec.upper()}' in coln]
-            
-            if gfd:
-                gdf_data[gfd] = gdf_data[gfd].fillna(0)
-                gdf_data[sec + '_' + spec] = gdf_data[gfd].sum(axis=1)
-                col_sum.append(sec + '_' + spec)
-            else:
-                gdf_data[sec + '_' + spec] = 0.0
-                col_sum.append(sec + '_' + spec)
-    
-    if 'pm10' in job_parameters['species']:
-        for sec in src_type:
-            if sec + '_pm10' in gdf_data.columns and sec + '_pm2_5' in gdf_data.columns:
-                gdf_data[sec + '_pm10'] += gdf_data[sec + '_pm2_5']
-    
-    if 'plant_id_left' in gdf_data.columns:
-        col_out = ['plant_id_left', 'plant_name_left', 'prtr_code_left', 'prtr_sector_left', 
-                   'maingroup_left', 'emission_height_left', 'wgs84_x_left', 'wgs84_y_left', 
-                   'geometry'] + col_sum
-    else:
-        col_out = ['ID_RASTER_left', 'geometry'] + col_sum
-    
-    return gdf_data[col_out].drop_duplicates()'''
 def nfr_to_gnfr(job_parameters, gdf_data, sectors):
     coln = list(gdf_data.columns)
     src_type = [item[0] for item in sectors]
@@ -187,70 +156,6 @@ def clean_emission_array(array, building_mask=None):
     
     return cleaned
 
-'''def prep_greta_data(data_parameters, job_parameters, sectors):
-    bbox_grid = [
-        job_parameters['min_lon'],
-        job_parameters['min_lat'],
-        job_parameters['max_lon'],
-        job_parameters['max_lat']
-    ]
-    bbox_epsg = str(job_parameters['epsg_code'])
-    
-    try:
-        bbox_greta = tuple(bbox_transform(25832, job_parameters['epsg_code'],
-                                        job_parameters['min_lon'], job_parameters['min_lat'],
-                                        job_parameters['max_lon'], job_parameters['max_lat']))
-    except Exception as e:
-        raise ValueError(f"Bounding box transformation failed: {str(e)}")
-
-    try:
-        prtr1_greta = gpd.read_file(data_parameters['emiss_dir'], layer=0, bbox=bbox_greta)
-        prtr2_greta = gpd.read_file(data_parameters['emiss_dir'], layer=1, bbox=bbox_greta)
-        prtr_greta = gpd.sjoin(prtr1_greta, prtr2_greta, how="left", predicate="intersects")
-    except Exception as e:
-        raise RuntimeError(f"Failed to load PRTR data: {str(e)}")
-
-    try:
-        rast1_greta = gpd.read_file(data_parameters['emiss_dir'], layer=2, bbox=bbox_greta)
-        rast2_greta = gpd.read_file(data_parameters['emiss_dir'], layer=3, bbox=bbox_greta)
-        rast3_greta = gpd.read_file(data_parameters['emiss_dir'], layer=4, bbox=bbox_greta)
-
-        #rast_greta = gpd.sjoin(rast1_greta, rast2_greta,  how="left", predicate="intersects")
-        rast_greta_temp = gpd.sjoin(rast1_greta, rast2_greta, how="left", predicate="intersects")
-        
-        # Then join the result with rast3
-        rast_greta = gpd.sjoin(rast_greta_temp, rast3_greta, how="left", predicate="intersects")
-    except Exception as e:
-        raise RuntimeError(f"Failed to load raster data: {str(e)}")
-
-    gdf_prtr = nfr_to_gnfr(job_parameters, prtr_greta, sectors)
-    gdf_grid = nfr_to_gnfr(job_parameters, rast_greta, sectors)
-    
-    try:
-        gdf_prtr.drop('geometry', axis=1).to_csv(
-            os.path.join(job_parameters['job_path'], 'point_sources.csv'),
-            index=False
-        )
-    except Exception as e:
-        print(f"Warning: Could not save point sources: {str(e)}")
-
-    gdf_grid['area_km2'] = gdf_grid.geometry.area / 1e6
-    
-    g_to_kg = 1e6
-    km2_to_m2 = 1e6
-    conversion_factor = g_to_kg / km2_to_m2
-
-    for spec in job_parameters['species']:
-        for sec in [s[0] for s in sectors]:
-            col_name = f"{sec}_{spec}"
-            
-            if col_name in gdf_prtr.columns:
-                gdf_prtr[col_name] *= g_to_kg
-            
-            if col_name in gdf_grid.columns:
-                gdf_grid[col_name] = gdf_grid[col_name] * conversion_factor
-
-    return gdf_grid, bbox_grid, bbox_epsg'''
 def prep_greta_data(data_parameters, job_parameters, sectors):
     bbox_grid = [
         job_parameters['min_lon'],
@@ -340,8 +245,9 @@ def create_in_memory_raster(array, transform, projection, data_type=gdal.GDT_Flo
     mem_raster.GetRasterBand(1).WriteArray(array)
     return mem_raster
 
-def create_zero_emission_file(job_parameters, rows, cols, clc_trans, clc_wkt, main_sectors):
-    output_fn = os.path.join(job_parameters['job_path'], 'emission_o3_yearly.tif')
+def create_zero_emission_file(job_parameters, rows, cols, clc_trans, clc_wkt, main_sectors, species_name):
+    """Create zero-valued emission files for species with no emissions"""
+    output_fn = os.path.join(job_parameters['job_path'], f'emission_{species_name}_yearly.tif')
     
     zero_arr = np.zeros((rows, cols, len(main_sectors)), dtype=np.float32)
     
@@ -366,19 +272,21 @@ def create_zero_emission_file(job_parameters, rows, cols, clc_trans, clc_wkt, ma
 
         metadata = {
             'units': 'kg/m²',
-            'conversion': 'Zero values for O3',
+            'conversion': f'Zero values for {species_name.upper()}',
             'temporal_status': 'Yearly_only',
             'building_removal': 'Not applicable',
             'value_cleaning': 'All zeros',
-            'notes': 'Created automatically because NOx was present in species list'
+            'notes': f'Created automatically because NOx was present in species list'
         }
         dst_ds.SetMetadata(metadata)
         dst_ds = None
 
-        print(f"\nCreated zero-valued O3 emission file: {output_fn}")
+        print(f"\nCreated zero-valued {species_name.upper()} emission file: {output_fn}")
+        return True
 
     except Exception as e:
-        print(f"\nError creating zero-valued O3 file: {str(e)}")
+        print(f"\nError creating zero-valued {species_name.upper()} file: {str(e)}")
+        return False
 
 def distribute_emissions_using_proxy(coarse_emis, proxy_patch, patch_size, conversion_factor):
     """
@@ -465,11 +373,31 @@ def downscale_emissions(job_parameters, sectors, gdf_grid, bbox, epsg, data_para
     max_input_values = {}
     max_output_values = {}
 
-    if 'nox' in [s.lower() for s in job_parameters['species']] and 'o3' not in [s.lower() for s in job_parameters['species']]:
-        print("\nNOx detected in species list - creating zero-valued O3 emission file")
-        create_zero_emission_file(job_parameters, rows, cols, clc_trans, clc_wkt, main_sectors)
+    # Create zero-valued files for O3 and additional NOx-related species if NOx is present
+    # AUTO-ADD the new species to job_parameters so they get processed in temporal disaggregation
+    if 'nox' in [s.lower() for s in job_parameters['species']]:
+        print("\nNOx detected in species list - creating zero-valued emission files for related species")
+        
+        # Species that should have zero-valued files when NOx is present
+        additional_nox_species = ['hno3', 'rcho', 'ho2', 'ro2', 'oh', 'h2o']
+        
+        for species_name in additional_nox_species:
+            if species_name not in [s.lower() for s in job_parameters['species']]:
+                print(f"Auto-adding {species_name} to species list for processing")
+                job_parameters['species'].append(species_name)
+        
+        # Now create zero-valued files for all NOx-related species
+        zero_species = ['o3'] + additional_nox_species
+        
+        for species_name in zero_species:
+            create_zero_emission_file(job_parameters, rows, cols, clc_trans, clc_wkt, main_sectors, species_name)
 
     for spec in tqdm(job_parameters['species'], desc="Processing species"):
+        # Skip if this is one of the zero-valued species (they were already created above)
+        if spec.lower() in ['o3', 'hno3', 'rcho', 'ho2', 'ro2', 'oh', 'h2o']:
+            print(f"\nSkipping {spec} - zero-valued file already created")
+            continue
+            
         yearly_arr = np.zeros((rows, cols, len(sectors)), dtype=np.float32)
         max_input_values[spec] = {}
         max_output_values[spec] = {}
@@ -625,5 +553,3 @@ def downscale_emissions(job_parameters, sectors, gdf_grid, bbox, epsg, data_para
         except Exception as e:
             print(f"\nError creating output file: {str(e)}")
             continue
-
-####
