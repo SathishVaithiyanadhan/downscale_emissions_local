@@ -455,9 +455,9 @@ class TemporalProfiler:
                 mass_rel_diff = mass_diff / yearly_mass[sector] * 100 if yearly_mass[sector] > 0 else 0
                 
                 if mass_rel_diff < 0.1:  # 0.1% tolerance
-                    print(f" Mass conserved for {sector}: {mass_rel_diff:.4f}% difference")
+                    print(f"✓ Mass conserved for {sector}: {mass_rel_diff:.4f}% difference")
                 else:
-                    print(f" Mass conservation warning for {sector}: {mass_rel_diff:.4f}% difference")
+                    print(f"✗ Mass conservation warning for {sector}: {mass_rel_diff:.4f}% difference")
             
             # Check total mass conservation
             total_mass_diff = abs(total_yearly_mass - total_disaggregated_mass)
@@ -469,10 +469,10 @@ class TemporalProfiler:
             print(f"Total relative difference: {total_mass_rel_diff:.4f}%")
             
             if total_mass_rel_diff < 0.1:
-                print("Total mass conservation verified")
+                print("✓ Total mass conservation verified")
                 return True
             else:
-                print("Total mass conservation warning")
+                print("✗ Total mass conservation warning")
                 return False
                 
         except Exception as e:
@@ -642,9 +642,9 @@ class TemporalProfiler:
             
             # Add mass conservation status to output
             if mass_conserved:
-                print(" Mass conservation verified")
+                print("✓ Mass conservation verified")
             else:
-                print(" Mass conservation warnings present")
+                print("✗ Mass conservation warnings present")
             
             return True
         except Exception as e:
@@ -727,7 +727,7 @@ class TemporalProfiler:
             out_ds.SetMetadata(metadata)
             out_ds = None
             
-            print(f" Successfully created empty temporal file: {temporal_fn}")
+            print(f"✓ Successfully created empty temporal file: {temporal_fn}")
             return True
             
         except Exception as e:
@@ -781,9 +781,9 @@ class TemporalProfiler:
                 if os.path.exists(yearly_fn):
                     success = self._create_empty_temporal_file(job_parameters, spec, main_sectors, start_date, end_date)
                     if success:
-                        print(f" Created temporal file for {spec}")
+                        print(f"✓ Created temporal file for {spec}")
                     else:
-                        print(f" Failed to create temporal file for {spec}")
+                        print(f"✗ Failed to create temporal file for {spec}")
                 else:
                     print(f"Warning: Yearly file not found for zero-emission species {spec}")
         
@@ -809,8 +809,8 @@ class TemporalProfiler:
             success = self._process_temporal_disaggregation(input_fn, base_output_fn, main_sectors, start_date, end_date)
             
             if success:
-                print(f" Successfully processed {spec}")
+                print(f"✓ Successfully processed {spec}")
             else:
-                print(f" Failed to process {spec}")
+                print(f"✗ Failed to process {spec}")
                 
         print("\n=== Mass Conserved downscaling of GRETA emissions with Temporal Disaggregation Completed ===")

@@ -444,14 +444,36 @@ def downscale_emissions(job_parameters, sectors, gdf_grid, bbox, epsg, data_para
 
                 # sector-specific proxies
                 if sec == 'A_PublicPower':
-                    proxy = np.isin(clc_arr, [12100]).astype(float) * nightlight_arr
+                    #proxy = np.isin(clc_arr, [12100]).astype(float) * nightlight_arr
+                    # Calculate the three components with their respective weights
+                    clc_component = np.isin(clc_arr, [12100]).astype(float) * 0.20  # 20% weight
+                    nightlight_component = nightlight_arr * 0.10  # 10% weight
+                    pop_component = pop_arr * 0.2                    
+                    # Start with OSM array as base (70% weight)
+                    osm_component = osm_arr.copy() * 0.50
+                    
+                    # Add the other components
+                    proxy = osm_component + clc_component + nightlight_component + pop_component
 
                 elif sec == 'B_Industry':
-                    proxy = np.isin(clc_arr, [12100, 13100, 13300]).astype(float) * nightlight_arr
+                    #proxy = np.isin(clc_arr, [12100, 13100, 13300]).astype(float) * nightlight_arr
+                    clc_component = np.isin(clc_arr, [12100, 13100, 13300]).astype(float) * 0.40  # 40%
+                    nightlight_component = nightlight_arr * 0.30  # 30%
+                    osm_component = osm_arr.copy() * 0.30  # 30%
+                    
+                    # Combine all components
+                    proxy = clc_component + nightlight_component + osm_component
 
                 elif sec == 'C_OtherStationaryComb':
-                    proxy = (np.isin(clc_arr, [11100, 11210, 11220, 11230, 11240]).astype(float) * pop_arr) \
-                        + (nightlight_arr * 0.5)
+                    #proxy = (np.isin(clc_arr, [11100, 11210, 11220, 11230, 11240]).astype(float) * pop_arr) \
+                    #    + (nightlight_arr * 0.5)
+                    clc_component = np.isin(clc_arr, [11100, 11210, 11220, 11230, 11240]).astype(float) * 0.20  # 20%
+                    nightlight_component = nightlight_arr * 0.10  # 10%
+                    osm_component = osm_arr.copy() * 0.30  # 30%
+                    pop_component = pop_arr * 0.40  # 40%
+                    
+                    # Combine all components
+                    proxy = clc_component + nightlight_component + osm_component + pop_component
 
                 elif sec == 'D_Fugitives':
                     proxy = np.isin(clc_arr, [12100, 13100]).astype(float) * nightlight_arr
@@ -471,7 +493,13 @@ def downscale_emissions(job_parameters, sectors, gdf_grid, bbox, epsg, data_para
                     proxy = np.isin(clc_arr, [12400]).astype(float) * nightlight_arr
 
                 elif sec == 'I_OffRoad':
-                    proxy = np.isin(clc_arr, [12210, 12220, 12230, 13300]).astype(float) * nightlight_arr
+                    #proxy = np.isin(clc_arr, [12210, 12220, 12230, 13300]).astype(float) * nightlight_arr
+                    clc_component = np.isin(clc_arr, [12210, 12220, 12230, 13300]).astype(float) * 0.10  # 10%
+                    nightlight_component = nightlight_arr * 0.20  # 20%
+                    osm_component = osm_arr.copy() * 0.70  # 70%
+    
+                    # Combine all components
+                    proxy = clc_component + nightlight_component + osm_component
 
                 elif sec == 'J_Waste':
                     proxy = np.isin(clc_arr, [13100]).astype(float) * nightlight_arr
