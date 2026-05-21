@@ -1,4 +1,3 @@
-#### simple hno3, rcho, ho2, ro2, oh, h2o added
 #Downscale emissions from coarse to fine resolution using proxy data
 import os
 import numpy as np
@@ -31,23 +30,14 @@ def bbox_transform(in_crs, out_crs, cell_minx, cell_miny, cell_maxx, cell_maxy, 
     except Exception as e:
         raise ValueError(f"CRS transformation failed: {str(e)}")
 
+
 def nfr_to_gnfr(job_parameters, gdf_data, sectors):
     coln = list(gdf_data.columns)
     src_type = [item[0] for item in sectors]
     col_sum = []
     
-    # DEBUG: Print what columns we actually have
-    print(f"DEBUG: Available columns in data ({len(coln)} total):")
-    print(f"  First 10: {coln[:10]}")
-    print(f"  ID columns found: {[col for col in coln if 'ID' in col or 'id' in col]}")
-    
-    # DEBUG: Check for emission columns
-    emission_cols = [col for col in coln if col.startswith('E_')]
-    print(f"  Emission columns found: {len(emission_cols)}")
-    
     for spec in job_parameters['species']:
         spec_upper = spec.upper()
-        print(f"\nDEBUG: Processing species: {spec_upper}")
         
         for sec in src_type:
             sidx = src_type.index(sec)
@@ -60,33 +50,21 @@ def nfr_to_gnfr(job_parameters, gdf_data, sectors):
                 if expected_col in coln:
                     gfd.append(expected_col)
             
-            print(f"  Sector {sec}: Looking for {len(subsec)} NFR codes, found {len(gfd)} emission columns")
-            
             if gfd:
                 # Fill NaN values and sum
                 for col in gfd:
                     gdf_data[col] = gdf_data[col].fillna(0)
                 gdf_data[sec + '_' + spec] = gdf_data[gfd].sum(axis=1)
                 col_sum.append(sec + '_' + spec)
-                
-                # Check if we have non-zero emissions
-                total_emissions = gdf_data[sec + '_' + spec].sum()
-                print(f"    Total emissions for {sec}_{spec}: {total_emissions}")
             else:
                 gdf_data[sec + '_' + spec] = 0.0
                 col_sum.append(sec + '_' + spec)
-                print(f"    No emissions found for {sec}_{spec}")
     
-    # Handle PM10 including PM2.5 if needed
-    if 'pm10' in job_parameters['species']:
-        for sec in src_type:
-            pm10_col = sec + '_pm10'
-            pm25_col = sec + '_pm2_5'
-            if pm10_col in gdf_data.columns and pm25_col in gdf_data.columns:
-                gdf_data[pm10_col] += gdf_data[pm25_col]
-                print(f"DEBUG: Added PM2.5 to PM10 for sector {sec}")
+    # NOTE: GRETA already includes PM2.5 in reported PM10 values
+    # So no addition needed - skipping to avoid double-counting
+    # The PM2.5 to PM10 addition block has been removed
     
-    # Build output columns - FIXED VERSION
+    # Build output columns
     col_out = []
     
     # Add geometry first (always required for GeoDataFrame)
@@ -96,11 +74,10 @@ def nfr_to_gnfr(job_parameters, gdf_data, sectors):
     col_out.extend(col_sum)
     
     # Try to add an ID column if available
-    possible_id_cols = ['ID_RASTER', 'plant_id', 'OBJECTID', 'id']  # Removed ID_RASTER_left
+    possible_id_cols = ['ID_RASTER', 'plant_id', 'OBJECTID', 'id']
     for id_col in possible_id_cols:
         if id_col in gdf_data.columns:
-            col_out.insert(0, id_col)  # Add ID at the beginning
-            print(f"DEBUG: Added ID column: {id_col}")
+            col_out.insert(0, id_col)
             break
     
     # Final check: ensure all output columns exist
@@ -108,8 +85,6 @@ def nfr_to_gnfr(job_parameters, gdf_data, sectors):
     if missing_cols:
         print(f"WARNING: Missing columns in output: {missing_cols}")
         col_out = [col for col in col_out if col in gdf_data.columns]
-    
-    print(f"DEBUG: Final output columns ({len(col_out)}): {col_out}")
     
     return gdf_data[col_out].drop_duplicates()
 
@@ -156,6 +131,7 @@ def clean_emission_array(array, building_mask=None):
     
     return cleaned
 
+
 def prep_greta_data(data_parameters, job_parameters, sectors):
     bbox_grid = [
         job_parameters['min_lon'],
@@ -172,26 +148,29 @@ def prep_greta_data(data_parameters, job_parameters, sectors):
     except Exception as e:
         raise ValueError(f"Bounding box transformation failed: {str(e)}")
 
+    # Try to load PRTR point source data (layers 0-1) - optional, skip if not available
     try:
         prtr1_greta = gpd.read_file(data_parameters['emiss_dir'], layer=0, bbox=bbox_greta)
         prtr2_greta = gpd.read_file(data_parameters['emiss_dir'], layer=1, bbox=bbox_greta)
         prtr_greta = gpd.sjoin(prtr1_greta, prtr2_greta, how="left", predicate="intersects")
+        print(f"PRTR data loaded: {len(prtr_greta)} features")
     except Exception as e:
-        raise RuntimeError(f"Failed to load PRTR data: {str(e)}")
+        print(f"Note: PRTR point sources not found (layers 0-1): {str(e)}")
+        # Create empty GeoDataFrame since PRTR data is optional
+        prtr_greta = gpd.GeoDataFrame(geometry=[], crs=f"EPSG:{job_parameters['epsg_code']}")
 
+    # Load raster grid data (layers 2, 3, 4) - required
     try:
-        # Load all three raster parts
         rast1_greta = gpd.read_file(data_parameters['emiss_dir'], layer=2, bbox=bbox_greta)
         rast2_greta = gpd.read_file(data_parameters['emiss_dir'], layer=3, bbox=bbox_greta)
         rast3_greta = gpd.read_file(data_parameters['emiss_dir'], layer=4, bbox=bbox_greta)
         
-        # Use merge instead of sjoin for raster data (more efficient for same geometries)
-        # First, reset indices to avoid index conflicts
+        # Reset indices to avoid index conflicts
         rast1_greta = rast1_greta.reset_index(drop=True)
         rast2_greta = rast2_greta.reset_index(drop=True)
         rast3_greta = rast3_greta.reset_index(drop=True)
         
-        # Merge based on index since they should have the same geometries in same order
+        # Merge based on index since they have the same geometries in same order
         rast_greta = rast1_greta.copy()
         
         # Add columns from rast2_greta (excluding geometry)
@@ -203,27 +182,36 @@ def prep_greta_data(data_parameters, job_parameters, sectors):
         rast3_cols = [col for col in rast3_greta.columns if col != 'geometry']
         for col in rast3_cols:
             rast_greta[col] = rast3_greta[col]
+        
+        print(f"Raster grid data loaded: {len(rast_greta)} features")
             
     except Exception as e:
-        raise RuntimeError(f"Failed to load raster data: {str(e)}")
+        raise RuntimeError(f"Failed to load raster data (layers 2-4): {str(e)}")
 
+    # Convert NFR codes to GNFR sectors for both datasets
     gdf_prtr = nfr_to_gnfr(job_parameters, prtr_greta, sectors)
     gdf_grid = nfr_to_gnfr(job_parameters, rast_greta, sectors)
     
-    try:
-        gdf_prtr.drop('geometry', axis=1).to_csv(
-            os.path.join(job_parameters['job_path'], 'point_sources.csv'),
-            index=False
-        )
-    except Exception as e:
-        print(f"Warning: Could not save point sources: {str(e)}")
+    # Save point sources if not empty
+    if not gdf_prtr.empty and len(gdf_prtr) > 1:
+        try:
+            gdf_prtr.drop('geometry', axis=1).to_csv(
+                os.path.join(job_parameters['job_path'], 'point_sources.csv'),
+                index=False
+            )
+            print(f"Point sources saved to CSV")
+        except Exception as e:
+            print(f"Warning: Could not save point sources: {str(e)}")
 
+    # Calculate area in km² for grid cells
     gdf_grid['area_km2'] = gdf_grid.geometry.area / 1e6
     
-    gg_to_kg = 1e6
-    km2_to_m2 = 1e6
-    conversion_factor = gg_to_kg / km2_to_m2
+    # Conversion factors
+    gg_to_kg = 1e6  # Gigagram to kilogram
+    km2_to_m2 = 1e6  # km² to m²
+    conversion_factor = gg_to_kg / km2_to_m2  # Gg/km² to kg/m²
 
+    # Apply unit conversions
     for spec in job_parameters['species']:
         for sec in [s[0] for s in sectors]:
             col_name = f"{sec}_{spec}"
@@ -379,7 +367,7 @@ def downscale_emissions(job_parameters, sectors, gdf_grid, bbox, epsg, data_para
         print("\nNOx detected in species list - creating zero-valued emission files for related species")
         
         # Species that should have zero-valued files when NOx is present
-        additional_nox_species = ['hno3', 'rcho', 'ho2', 'ro2', 'oh', 'h2o']
+        additional_nox_species = ['hno3', 'rcho', 'ho2', 'ro2', 'oh', 'h2o', 'ocsv', 'ocnv']
         
         for species_name in additional_nox_species:
             if species_name not in [s.lower() for s in job_parameters['species']]:
@@ -394,7 +382,7 @@ def downscale_emissions(job_parameters, sectors, gdf_grid, bbox, epsg, data_para
 
     for spec in tqdm(job_parameters['species'], desc="Processing species"):
         # Skip if this is one of the zero-valued species (they were already created above)
-        if spec.lower() in ['o3', 'hno3', 'rcho', 'ho2', 'ro2', 'oh', 'h2o']:
+        if spec.lower() in ['o3', 'hno3', 'rcho', 'ho2', 'ro2', 'oh', 'h2o', 'ocsv', 'ocnv']:
             print(f"\nSkipping {spec} - zero-valued file already created")
             continue
             
