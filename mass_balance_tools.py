@@ -20,6 +20,9 @@ def process_species(args):
     spec_upper = spec.upper()
     input_masses = []
     
+    # Define heavy metals - these are in tonnes in GRETA, not kt
+    heavy_metals = ['pb', 'cd', 'hg', 'as', 'ni']
+    
     # Calculate input masses for each sector
     for sec_idx, sec in enumerate(sectors[:13]):
         sector_name = sec[0]
@@ -29,8 +32,13 @@ def process_species(args):
         for nfr in nfr_codes:
             col_name = f"E_{nfr}_{spec_upper}"
             if col_name in gdf_grid.columns:
-                emissions = gdf_grid[col_name] * gdf_grid['area_m2']
-                total_mass += emissions.sum()
+                # Heavy metals are in tonnes/cell, regular species in kt/cell
+                if spec.lower() in heavy_metals:
+                    # tonnes → kg
+                    total_mass += gdf_grid[col_name].sum() * 1000
+                else:
+                    # kt (Gg) → kg
+                    total_mass += gdf_grid[col_name].sum() * 1e6
         
         input_masses.append(total_mass)
         print(f"Input mass for {sector_name}_{spec}: {total_mass:.6f} kg")

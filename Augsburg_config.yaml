@@ -1,24 +1,24 @@
 #Temporal_Working
 #Data Directories
 data_settings:
-  emiss_dir: /home/vaithisa/Input_data/GRETA_2022.gdb
-  urbanAtlas_dir: /home/vaithisa/Input_data/UrbanAtlas_Germany_singlelayer.gdb   #UrbanAtlas_Augsburg/UrbanAtlas_Augsburg.gdb #/home/vaithisa/Input_data/UrbanAtlas_Germany/UrbanAtlas_Germany.gdb  #
-  esa_worldcover: /home/vaithisa/Input_data/ESA_landuse_merged.tif
-  corine_dir: /home/vaithisa/Input_data/U2018_CLC2018_V2020_20u1.gdb
-  popul_dir: /home/vaithisa/Input_data/GHS_POP_E2020_GLOBE_R2023A_54009_100_V1_0_R4_C19/GHS_POP_E2020_GLOBE_R2023A_54009_100_V1_0_R4_C19.tif
-  edgar_dir: /home/vaithisa/Input_data/EDGAR
-  pm_speciation_file: /home/vaithisa/Input_data/PM_Speciation_CAMS_REG/CAMS-REG-v6_PM_split.xlsx
-  building_shp: /home/vaithisa/Input_data/OB_SCH_buildingheight/OB_SCH_buildingheight.shp
-  viirs_nightlight: /home/vaithisa/Input_data/VNL_npp_2024_europe.tif
+  emiss_dir: /hpc/gpfs2/home/u/vaithisa/UniA/Input_data/GRETA_2022.gdb
+  urbanAtlas_dir: /hpc/gpfs2/home/u/vaithisa/UniA/Input_data/UrbanAtlas_Germany_singlelayer.gdb   #UrbanAtlas_Augsburg/UrbanAtlas_Augsburg.gdb #/home/vaithisa/Input_data/UrbanAtlas_Germany/UrbanAtlas_Germany.gdb  #
+  esa_worldcover: /hpc/gpfs2/home/u/vaithisa/UniA/Input_data/ESA_landuse_merged.tif
+  corine_dir: /hpc/gpfs2/home/u/vaithisa/UniA/Input_data/U2018_CLC2018_V2020_20u1.gdb
+  popul_dir: /hpc/gpfs2/home/u/vaithisa/UniA/Input_data/GHS_POP_E2020_GLOBE_R2023A_54009_100_V1_0_R4_C19/GHS_POP_E2020_GLOBE_R2023A_54009_100_V1_0_R4_C19.tif
+  edgar_dir: /hpc/gpfs2/home/u/vaithisa/UniA/Input_data/EDGAR
+  pm_speciation_file: /hpc/gpfs2/home/u/vaithisa/UniA/Input_data/PM_Speciation_CAMS_REG/CAMS-REG-v6_PM_split.xlsx
+  building_shp: /hpc/gpfs2/home/u/vaithisa/UniA/Input_data/OB_SCH_buildingheight/OB_SCH_buildingheight.shp
+  viirs_nightlight: /hpc/gpfs2/home/u/vaithisa/UniA/Input_data/VNL_npp_2024_europe.tif
 
 # Simulation parameters
 job_settings:
-  job_path: /mnt/d/downscaled_emissions/UA_CLC2 #/home/vaithisa/Downscale_Emissions_simple/downscale  #/mnt/d/downscaled_emissions/UA_CLC #/home/vaithisa/Downscale_Emissions_simple/downscale_250 
+  job_path: /hpc/gpfs2/home/u/vaithisa/UniA/Downscale_Emissions_simple/Downscale_10m_3days/ 
   job_name: test
-  min_lon: 607713 #250m biggers augsburg  (607713, 5326684, 671030, 5390979)
-  max_lon: 671030
-  min_lat: 5326684 
-  max_lat: 5390979
+  #min_lon: 607713 #250m biggers augsburg  (607713, 5326684, 671030, 5390979)
+  #max_lon: 671030
+  #min_lat: 5326684 
+  #max_lat: 5390979
   #min_lon: 638000 #636000 #Augsburg_center_domain
   #max_lon: 644000 #646000
   #min_lat: 5356000 #5350000
@@ -27,7 +27,19 @@ job_settings:
   #max_lon: 649000
   #min_lat: 5345000
   #max_lat: 5373000
-  resol: 250
+  #min_lon: 623837  #Augsburg_64m domain
+  #max_lon: 656861
+  #min_lat: 5341737
+  #max_lat: 5374761
+  min_lon: 639322  #Augsburg_8m Bourgesplatz domain   	
+  max_lon: 640366
+  min_lat: 5359358
+  max_lat: 5360402
+  #min_lon: 638285  #Augsburg_8m Konigsplatz domain
+  #max_lon: 642413
+  #min_lat: 5356185
+  #max_lat: 5360800
+  resol: 8
   epsg_code: 25832
   #species: [pm2_5]
   species: [n2o, nmvoc, so2, co, pm10, pm2_5, nh3, pb, cd, hg, as, ni, bc, co2, ch4, nox]
@@ -35,8 +47,8 @@ job_settings:
   inventory: GRETA
   temporal:
     apply_temporal: true
-    start_date: "2024-08-24 00:00:00"
-    end_date: "2024-08-26 23:00:00"
+    start_date: "2024-08-25 00:00:00"
+    end_date: "2024-08-25 23:00:00"
     country: "DEU"    # Will automatically include country code 22
     profile_year: 2017
   pm_speciation:

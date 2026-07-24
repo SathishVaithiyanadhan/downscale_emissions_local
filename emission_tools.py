@@ -1,3 +1,4 @@
+#### simple hno3, rcho, ho2, ro2, oh, h2o added
 #Downscale emissions from coarse to fine resolution using proxy data
 import os
 import numpy as np
@@ -30,7 +31,87 @@ def bbox_transform(in_crs, out_crs, cell_minx, cell_miny, cell_maxx, cell_maxy, 
     except Exception as e:
         raise ValueError(f"CRS transformation failed: {str(e)}")
 
-
+'''def nfr_to_gnfr(job_parameters, gdf_data, sectors):
+    coln = list(gdf_data.columns)
+    src_type = [item[0] for item in sectors]
+    col_sum = []
+    
+    # DEBUG: Print what columns we actually have
+    print(f"DEBUG: Available columns in data ({len(coln)} total):")
+    print(f"  First 10: {coln[:10]}")
+    print(f"  ID columns found: {[col for col in coln if 'ID' in col or 'id' in col]}")
+    
+    # DEBUG: Check for emission columns
+    emission_cols = [col for col in coln if col.startswith('E_')]
+    print(f"  Emission columns found: {len(emission_cols)}")
+    
+    for spec in job_parameters['species']:
+        spec_upper = spec.upper()
+        print(f"\nDEBUG: Processing species: {spec_upper}")
+        
+        for sec in src_type:
+            sidx = src_type.index(sec)
+            subsec = sectors[sidx][1:]
+            
+            # Look for emission columns for this sector and species
+            gfd = []
+            for n in subsec:
+                expected_col = f'E_{n}_{spec_upper}'
+                if expected_col in coln:
+                    gfd.append(expected_col)
+            
+            print(f"  Sector {sec}: Looking for {len(subsec)} NFR codes, found {len(gfd)} emission columns")
+            
+            if gfd:
+                # Fill NaN values and sum
+                for col in gfd:
+                    gdf_data[col] = gdf_data[col].fillna(0)
+                gdf_data[sec + '_' + spec] = gdf_data[gfd].sum(axis=1)
+                col_sum.append(sec + '_' + spec)
+                
+                # Check if we have non-zero emissions
+                total_emissions = gdf_data[sec + '_' + spec].sum()
+                print(f"    Total emissions for {sec}_{spec}: {total_emissions}")
+            else:
+                gdf_data[sec + '_' + spec] = 0.0
+                col_sum.append(sec + '_' + spec)
+                print(f"    No emissions found for {sec}_{spec}")
+    
+    # Handle PM10 including PM2.5 if needed
+    if 'pm10' in job_parameters['species']:
+        for sec in src_type:
+            pm10_col = sec + '_pm10'
+            pm25_col = sec + '_pm2_5'
+            if pm10_col in gdf_data.columns and pm25_col in gdf_data.columns:
+                gdf_data[pm10_col] += gdf_data[pm25_col]
+                print(f"DEBUG: Added PM2.5 to PM10 for sector {sec}")
+    
+    # Build output columns - FIXED VERSION
+    col_out = []
+    
+    # Add geometry first (always required for GeoDataFrame)
+    col_out.append('geometry')
+    
+    # Add the summed emission columns
+    col_out.extend(col_sum)
+    
+    # Try to add an ID column if available
+    possible_id_cols = ['ID_RASTER', 'plant_id', 'OBJECTID', 'id']  # Removed ID_RASTER_left
+    for id_col in possible_id_cols:
+        if id_col in gdf_data.columns:
+            col_out.insert(0, id_col)  # Add ID at the beginning
+            print(f"DEBUG: Added ID column: {id_col}")
+            break
+    
+    # Final check: ensure all output columns exist
+    missing_cols = [col for col in col_out if col not in gdf_data.columns]
+    if missing_cols:
+        print(f"WARNING: Missing columns in output: {missing_cols}")
+        col_out = [col for col in col_out if col in gdf_data.columns]
+    
+    print(f"DEBUG: Final output columns ({len(col_out)}): {col_out}")
+    
+    return gdf_data[col_out].drop_duplicates()'''
 def nfr_to_gnfr(job_parameters, gdf_data, sectors):
     coln = list(gdf_data.columns)
     src_type = [item[0] for item in sectors]
@@ -131,6 +212,85 @@ def clean_emission_array(array, building_mask=None):
     
     return cleaned
 
+'''def prep_greta_data(data_parameters, job_parameters, sectors):
+    bbox_grid = [
+        job_parameters['min_lon'],
+        job_parameters['min_lat'],
+        job_parameters['max_lon'],
+        job_parameters['max_lat']
+    ]
+    bbox_epsg = str(job_parameters['epsg_code'])
+    
+    try:
+        bbox_greta = tuple(bbox_transform(25832, job_parameters['epsg_code'],
+                                        job_parameters['min_lon'], job_parameters['min_lat'],
+                                        job_parameters['max_lon'], job_parameters['max_lat']))
+    except Exception as e:
+        raise ValueError(f"Bounding box transformation failed: {str(e)}")
+
+    try:
+        prtr1_greta = gpd.read_file(data_parameters['emiss_dir'], layer=0, bbox=bbox_greta)
+        prtr2_greta = gpd.read_file(data_parameters['emiss_dir'], layer=1, bbox=bbox_greta)
+        prtr_greta = gpd.sjoin(prtr1_greta, prtr2_greta, how="left", predicate="intersects")
+    except Exception as e:
+        raise RuntimeError(f"Failed to load PRTR data: {str(e)}")
+
+    try:
+        # Load all three raster parts
+        rast1_greta = gpd.read_file(data_parameters['emiss_dir'], layer=2, bbox=bbox_greta)
+        rast2_greta = gpd.read_file(data_parameters['emiss_dir'], layer=3, bbox=bbox_greta)
+        rast3_greta = gpd.read_file(data_parameters['emiss_dir'], layer=4, bbox=bbox_greta)
+        
+        # Use merge instead of sjoin for raster data (more efficient for same geometries)
+        # First, reset indices to avoid index conflicts
+        rast1_greta = rast1_greta.reset_index(drop=True)
+        rast2_greta = rast2_greta.reset_index(drop=True)
+        rast3_greta = rast3_greta.reset_index(drop=True)
+        
+        # Merge based on index since they should have the same geometries in same order
+        rast_greta = rast1_greta.copy()
+        
+        # Add columns from rast2_greta (excluding geometry)
+        rast2_cols = [col for col in rast2_greta.columns if col != 'geometry']
+        for col in rast2_cols:
+            rast_greta[col] = rast2_greta[col]
+        
+        # Add columns from rast3_greta (excluding geometry)
+        rast3_cols = [col for col in rast3_greta.columns if col != 'geometry']
+        for col in rast3_cols:
+            rast_greta[col] = rast3_greta[col]
+            
+    except Exception as e:
+        raise RuntimeError(f"Failed to load raster data: {str(e)}")
+
+    gdf_prtr = nfr_to_gnfr(job_parameters, prtr_greta, sectors)
+    gdf_grid = nfr_to_gnfr(job_parameters, rast_greta, sectors)
+    
+    try:
+        gdf_prtr.drop('geometry', axis=1).to_csv(
+            os.path.join(job_parameters['job_path'], 'point_sources.csv'),
+            index=False
+        )
+    except Exception as e:
+        print(f"Warning: Could not save point sources: {str(e)}")
+
+    gdf_grid['area_km2'] = gdf_grid.geometry.area / 1e6
+    
+    gg_to_kg = 1e6
+    km2_to_m2 = 1e6
+    conversion_factor = gg_to_kg / km2_to_m2
+
+    for spec in job_parameters['species']:
+        for sec in [s[0] for s in sectors]:
+            col_name = f"{sec}_{spec}"
+            
+            if col_name in gdf_prtr.columns:
+                gdf_prtr[col_name] *= gg_to_kg
+            
+            if col_name in gdf_grid.columns:
+                gdf_grid[col_name] = gdf_grid[col_name] * conversion_factor
+
+    return gdf_grid, bbox_grid, bbox_epsg'''
 
 def prep_greta_data(data_parameters, job_parameters, sectors):
     bbox_grid = [
@@ -206,18 +366,27 @@ def prep_greta_data(data_parameters, job_parameters, sectors):
     # Calculate area in km² for grid cells
     gdf_grid['area_km2'] = gdf_grid.geometry.area / 1e6
     
-    # Conversion factors
-    gg_to_kg = 1e6  # Gigagram to kilogram
+    # Define heavy metals - these are in tonnes in GRETA, not kt
+    heavy_metals = ['pb', 'cd', 'hg', 'as', 'ni']
     km2_to_m2 = 1e6  # km² to m²
-    conversion_factor = gg_to_kg / km2_to_m2  # Gg/km² to kg/m²
 
-    # Apply unit conversions
+    # Apply unit conversions (species-specific)
     for spec in job_parameters['species']:
+        # Heavy metals are in tonnes/cell, regular species are in kt (Gg)/cell
+        if spec.lower() in heavy_metals:
+            # tonnes → kg: ×1000; tonnes/km² → kg/m²: 1000/1e6 = 0.001
+            to_kg = 1000
+        else:
+            # kt (Gg) → kg: ×1e6; kt/km² → kg/m²: 1e6/1e6 = 1.0
+            to_kg = 1e6
+        
+        conversion_factor = to_kg / km2_to_m2
+        
         for sec in [s[0] for s in sectors]:
             col_name = f"{sec}_{spec}"
             
             if col_name in gdf_prtr.columns:
-                gdf_prtr[col_name] *= gg_to_kg
+                gdf_prtr[col_name] *= to_kg
             
             if col_name in gdf_grid.columns:
                 gdf_grid[col_name] = gdf_grid[col_name] * conversion_factor
@@ -329,8 +498,10 @@ def downscale_emissions(job_parameters, sectors, gdf_grid, bbox, epsg, data_para
         print("Warning: Building shapefile not found or not specified in config")
         building_mask = None
 
-    # conversion factor (Gg/km² -> kg/m²)
-    CONV_FACTOR = 1e6 / 1e6
+    # Grid values are already in kg/m² after prep_greta_data conversion
+    # (regular species: kt/km² → kg/m² with factor 1.0;
+    #  heavy metals: tonnes/km² → kg/m² with factor 0.001)
+    CONV_FACTOR = 1.0
 
     def load_proxy(proxy_path):
         try:
@@ -354,6 +525,13 @@ def downscale_emissions(job_parameters, sectors, gdf_grid, bbox, epsg, data_para
         clc_trans = (x_min, resol, 0, y_max, 0, -resol)
         clc_wkt = clc_ds.GetProjection()
         clc_ds = None
+
+        # Normalize each proxy source to [0, 1] so that weights are scale-independent
+        nightlight_norm = nightlight_arr / np.max(nightlight_arr) if np.max(nightlight_arr) > 1e-6 else np.zeros_like(nightlight_arr)
+        pop_norm = pop_arr / np.max(pop_arr) if np.max(pop_arr) > 1e-6 else np.zeros_like(pop_arr)
+        osm_norm = osm_arr / np.max(osm_arr) if np.max(osm_arr) > 1e-6 else np.zeros_like(osm_arr)
+        # CLC is already binary (0/1) from np.isin(...).astype(float) — no normalization needed
+
     except Exception as e:
         raise RuntimeError(f"Proxy loading failed: {str(e)}")
 
@@ -432,80 +610,71 @@ def downscale_emissions(job_parameters, sectors, gdf_grid, bbox, epsg, data_para
 
                 # sector-specific proxies
                 if sec == 'A_PublicPower':
-                    #proxy = np.isin(clc_arr, [12100]).astype(float) * nightlight_arr
-                    # Calculate the three components with their respective weights
-                    clc_component = np.isin(clc_arr, [12100]).astype(float) * 0.20  # 20% weight
-                    nightlight_component = nightlight_arr * 0.20  # 10% weight
-                    pop_component = pop_arr * 0.25                  
-                    osm_component = osm_arr.copy() * 0.35
+                    clc_component = np.isin(clc_arr, [12100]).astype(float) * 0.20
+                    nightlight_component = nightlight_norm * 0.20
+                    pop_component = pop_norm * 0.25
+                    osm_component = osm_norm * 0.35
                     
                     # Add the other components
                     proxy = osm_component + clc_component + nightlight_component + pop_component
 
                 elif sec == 'B_Industry':
-                    #proxy = np.isin(clc_arr, [12100, 13100, 13300]).astype(float) * nightlight_arr
-                    clc_component = np.isin(clc_arr, [12100, 13100, 13300]).astype(float) * 0.40  # 40%
-                    nightlight_component = nightlight_arr * 0.35  # 30%
-                    osm_component = osm_arr.copy() * 0.20  # 30%
-                    pop_component = pop_arr * 0.05  # 40%
+                    clc_component = np.isin(clc_arr, [12100, 13100, 13300]).astype(float) * 0.40
+                    nightlight_component = nightlight_norm * 0.35
+                    osm_component = osm_norm * 0.20
+                    pop_component = pop_norm * 0.05
                     # Combine all components
                     proxy = clc_component + nightlight_component + osm_component + pop_component
 
                 elif sec == 'C_OtherStationaryComb':
-                    #proxy = (np.isin(clc_arr, [11100, 11210, 11220, 11230, 11240]).astype(float) * pop_arr) \
-                    #    + (nightlight_arr * 0.5)
-                    clc_component = np.isin(clc_arr, [11100, 11210, 11220, 11230, 11240]).astype(float) * 0.20  # 20%
-                    nightlight_component = nightlight_arr * 0.10  # 10%
-                    osm_component = osm_arr.copy() * 0.30  # 30%
-                    pop_component = pop_arr * 0.40  # 40%
+                    clc_component = np.isin(clc_arr, [11100, 11210, 11220, 11230, 11240]).astype(float) * 0.20
+                    nightlight_component = nightlight_norm * 0.10
+                    osm_component = osm_norm * 0.30
+                    pop_component = pop_norm * 0.40
                     
                     # Combine all components
                     proxy = clc_component + nightlight_component + osm_component + pop_component
 
                 elif sec == 'D_Fugitives':
-                    #proxy = np.isin(clc_arr, [12100, 13100]).astype(float) * nightlight_arr
-                    clc_component = np.isin(clc_arr, [12100, 13100]).astype(float) * 0.70  # 20%
-                    nightlight_component = nightlight_arr * 0.20  # 10%
-                    pop_component = pop_arr * 0.10  # 40%
+                    clc_component = np.isin(clc_arr, [12100, 13100]).astype(float) * 0.70
+                    nightlight_component = nightlight_norm * 0.20
+                    pop_component = pop_norm * 0.10
                     
                     # Combine all components
                     proxy = clc_component + nightlight_component + pop_component
 
                 elif sec == 'E_Solvents':
-                    #proxy = np.isin(clc_arr, [11100, 11210, 11220, 11230, 11240, 12100]).astype(float) * nightlight_arr
-                    clc_component = np.isin(clc_arr, [11100, 11210, 11220, 11230, 11240, 12100]).astype(float) * 0.30  # 20%
-                    nightlight_component = nightlight_arr * 0.30  # 10%
-                    pop_component = pop_arr * 0.40  # 40%
+                    clc_component = np.isin(clc_arr, [11100, 11210, 11220, 11230, 11240, 12100]).astype(float) * 0.30
+                    nightlight_component = nightlight_norm * 0.30
+                    pop_component = pop_norm * 0.40
                     
                     # Combine all components
                     proxy = clc_component + nightlight_component + pop_component
 
                 elif sec == 'F_RoadTransport':
-                    proxy = osm_arr.copy()
+                    proxy = osm_norm.copy()
                     if np.sum(proxy) <= 0:
                         proxy = np.ones_like(proxy)
 
                 elif sec == 'G_Shipping':
-                    proxy = np.isin(clc_arr, [12300]).astype(float) * nightlight_arr
+                    proxy = np.isin(clc_arr, [12300]).astype(float) * nightlight_norm
 
                 elif sec == 'H_Aviation':
-                    proxy = np.isin(clc_arr, [12400]).astype(float) * nightlight_arr
+                    proxy = np.isin(clc_arr, [12400]).astype(float) * nightlight_norm
 
                 elif sec == 'I_OffRoad':
-                    #proxy = np.isin(clc_arr, [12210, 12220, 12230, 13300]).astype(float) * nightlight_arr
-                    clc_component = np.isin(clc_arr, [12210, 12220, 12230, 13300]).astype(float) * 0.35  # 10%
-                    nightlight_component = nightlight_arr * 0.05  # 20%
-                    osm_component = osm_arr.copy() * 0.35  # 70%
-                    pop_component = pop_arr * 0.25
+                    clc_component = np.isin(clc_arr, [12210, 12220, 12230, 13300]).astype(float) * 0.35
+                    nightlight_component = nightlight_norm * 0.05
+                    osm_component = osm_norm * 0.35
+                    pop_component = pop_norm * 0.25
     
                     # Combine all components
                     proxy = clc_component + nightlight_component + osm_component + pop_component
 
                 elif sec == 'J_Waste':
-                    #proxy = np.isin(clc_arr, [13100]).astype(float) * nightlight_arr
-                    clc_component = np.isin(clc_arr, [13100]).astype(float) * 0.50  # 20%
-                    nightlight_component = nightlight_arr * 0.10  # 10%
-                    pop_component = pop_arr * 0.40  # 40%
+                    clc_component = np.isin(clc_arr, [13100]).astype(float) * 0.50
+                    nightlight_component = nightlight_norm * 0.10
+                    pop_component = pop_norm * 0.40
                     
                     # Combine all components
                     proxy = clc_component + nightlight_component + pop_component
