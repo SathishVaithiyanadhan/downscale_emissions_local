@@ -545,7 +545,7 @@ def downscale_emissions(job_parameters, sectors, gdf_grid, bbox, epsg, data_para
         print("\nNOx detected in species list - creating zero-valued emission files for related species")
         
         # Species that should have zero-valued files when NOx is present
-        additional_nox_species = ['hno3', 'rcho', 'ho2', 'ro2', 'oh', 'h2o', 'ocsv', 'ocnv']
+        additional_nox_species = ['hno3', 'rcho', 'ho2', 'ro2', 'oh', 'h2o', 'ocsv', 'ocnv', 'h2so4']
         
         for species_name in additional_nox_species:
             if species_name not in [s.lower() for s in job_parameters['species']]:
@@ -560,7 +560,7 @@ def downscale_emissions(job_parameters, sectors, gdf_grid, bbox, epsg, data_para
 
     for spec in tqdm(job_parameters['species'], desc="Processing species"):
         # Skip if this is one of the zero-valued species (they were already created above)
-        if spec.lower() in ['o3', 'hno3', 'rcho', 'ho2', 'ro2', 'oh', 'h2o', 'ocsv', 'ocnv']:
+        if spec.lower() in ['o3', 'hno3', 'rcho', 'ho2', 'ro2', 'oh', 'h2o', 'ocsv', 'ocnv', 'h2so4']:
             print(f"\nSkipping {spec} - zero-valued file already created")
             continue
             
