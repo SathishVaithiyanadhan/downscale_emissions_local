@@ -12,6 +12,47 @@ import time
 from pathlib import Path
 import tempfile
 
+
+# ---------------------------------------------------------------------------
+# Primary (directly emitted) NO2 fraction of NOx, mass basis, annual mean.
+#
+#     m(NO2) = f * m(NOx)        m(NO) = (1 - f) * m(NOx)
+#
+# f is the energy/technology-dependent share of NOx emitted as NO2. It is the
+# EMISSION ratio, not the ambient NO2/NOx ratio (the latter is set by chemistry).
+# Values are GNFR-sector annual means.
+#
+# Sources: EMEP/EEA Air Pollutant Emission Inventory Guidebook (2019/2023, NOx
+# chapter and road-transport technology tables); COPERT 5 emission factors;
+# primary-NO2 trend studies (diesel oxidation-catalyst effect, e.g. Grice et al.,
+# Atmos. Environ., 2009).
+# ---------------------------------------------------------------------------
+NO2_FRACTION = {
+    'A_PublicPower':         0.06,  # large boilers / gas turbines: mostly NO
+    'B_Industry':            0.08,  # mixed gas / oil / coal combustion
+    'C_OtherStationaryComb': 0.12,  # incl. residential; wood stoves higher
+    'D_Fugitives':           0.05,  # mostly non-combustion leakage; weak basis
+    'E_Solvents':            0.00,  # no NOx
+    'F_RoadTransport':       0.20,  # EU fleet average
+    'G_Shipping':            0.05,  # 2-stroke marine diesel: mostly NO
+    'H_Aviation':            0.10,
+    'I_OffRoad':             0.18,  # diesel off-road, similar to road diesel
+    'J_Waste':               0.10,  # incineration
+    'K_AgriLivestock':       0.00,  # no NOx
+    'L_AgriOther':           0.20,  # biomass / agricultural residue burning
+}
+
+def get_no2_fraction(sector):
+    """Annual-mean primary NO2 fraction (mass) of NOx for a GNFR sector.
+
+    Returns
+    -------
+    float
+        f such that m(NO2) = f * m(NOx), m(NO) = (1 - f) * m(NOx).
+    """
+    return NO2_FRACTION.get(sector, 0.0)
+
+
 def process_species(args):
     """Parallel processing function for each species"""
     spec, job_params, data_params, sectors, gdf_grid = args
@@ -100,9 +141,14 @@ def process_species(args):
         return None
 
 def process_yearly_emissions(input_path, output_no_path, output_no2_path):
-    """Process yearly multi-sector NOx emissions to calculate NO and NO2 emissions."""
+    """Process yearly multi-sector NOx emissions to calculate NO and NO2 emissions.
+
+    Each sector's NOx mass is split into primary NO and NO2 using the
+    sector-specific fractions from :func:`get_no2_fraction`, and two 13-band
+    GeoTIFFs are written (12 sectors + SumAllSectors).
+    """
     start_time = time.time()
-    
+
     # Define sector names
     all_sector_names = [
         'A_PublicPower', 'B_Industry', 'C_OtherStationaryComb', 'D_Fugitives',
@@ -110,25 +156,6 @@ def process_yearly_emissions(input_path, output_no_path, output_no2_path):
         'I_OffRoad', 'J_Waste', 'K_AgriLivestock', 'L_AgriOther', 'SumAllSectors'
     ]
     processing_sectors = all_sector_names[:-1]  # Exclude 'SumAllSectors'
-    
-    def get_no2_fraction(sector):
-        """Returns annual average NO2 fraction of NOx for given sector."""
-        if sector == 'F_RoadTransport':
-            return 0.25  # Annual average for road transport
-        elif sector in ['G_Shipping', 'H_Aviation']:
-            return 0.10  # Shipping and aviation
-        elif sector == 'I_OffRoad':
-            return 0.15  # Off-road mobile
-        elif sector in ['A_PublicPower', 'B_Industry', 'C_OtherStationaryComb']:
-            return 0.08  # Stationary combustion
-        elif sector == 'D_Fugitives':
-            return 0.20  # Fugitives
-        elif sector == 'L_AgriOther':
-            return 0.20  # Biomass burning
-        elif sector == 'J_Waste':
-            return 0.10  # Incineration
-        else:
-            return 0.0   # Other sectors (negligible NO2)
 
     with rasterio.open(input_path) as src:
         total_bands = src.count
@@ -167,34 +194,61 @@ def process_yearly_emissions(input_path, output_no_path, output_no2_path):
                 
                 # Calculate total NOx masses for each sector to compute weighted NO2 fraction
                 pixel_area = abs(src.transform[0] * src.transform[4])
+                out_nodata = profile['nodata']
+
+                # Nodata handling: GRETA rasters use -9999 (not NaN) for missing
+                # cells, so np.nansum() would fold those fill values into every
+                # total. Mask them explicitly.
+                nodata_values = [
+                    nd for nd in (src.nodata, profile['nodata'])
+                    if nd is not None and not (isinstance(nd, float) and np.isnan(nd))
+                ]
+
+                def valid_mask(arr):
+                    """True where the cell is a real value (not nodata / NaN)."""
+                    mask = ~np.isnan(arr)
+                    for nd in nodata_values:
+                        mask &= arr != nd
+                    return mask
+
+                def total_mass(arr):
+                    """Total mass [kg] over valid cells only."""
+                    return float(np.nansum(np.where(valid_mask(arr), arr, np.nan))) * pixel_area
+
+                def split(arr, frac):
+                    """Split a NOx array into (NO, NO2), preserving nodata."""
+                    return (
+                        np.where(valid_mask(arr), arr * (1.0 - frac), out_nodata),
+                        np.where(valid_mask(arr), arr * frac, out_nodata),
+                    )
+
                 total_nox_mass = 0.0
                 weighted_no2_fraction_sum = 0.0
                 
                 # Process each sector
                 for sector_idx, sector in enumerate(processing_sectors):
                     nox = src.read(sector_idx + 1)
-                    
-                    # Calculate sector NOx mass
-                    sector_nox_mass = np.nansum(nox) * pixel_area
+
+                    # Calculate sector NOx mass (over valid cells only)
+                    sector_nox_mass = total_mass(nox)
                     sector_nox_masses[sector] = sector_nox_mass
                     total_nox_mass += sector_nox_mass
-                    
-                    # Split NOx into NO and NO2
+
+                    # Split NOx into NO and NO2 (nodata preserved)
                     no2_frac = get_no2_fraction(sector)
-                    no = nox * (1 - no2_frac)
-                    no2 = nox * no2_frac
-                    
+                    no, no2 = split(nox, no2_frac)
+
                     # Write sector bands
-                    no_dst.write(no, sector_idx + 1)
-                    no2_dst.write(no2, sector_idx + 1)
-                    
-                    # Store sector sums for verification
-                    sector_no_sums[sector] = np.nansum(no)
-                    sector_no2_sums[sector] = np.nansum(no2)
-                    
+                    no_dst.write(no.astype(np.float32), sector_idx + 1)
+                    no2_dst.write(no2.astype(np.float32), sector_idx + 1)
+
+                    # Store sector masses (kg) for verification
+                    sector_no_sums[sector] = total_mass(no)
+                    sector_no2_sums[sector] = total_mass(no2)
+
                     # Contribute to weighted NO2 fraction
                     weighted_no2_fraction_sum += sector_nox_mass * no2_frac
-                    
+
                     # Set band descriptions
                     band_desc = src.descriptions[sector_idx]
                     no_dst.set_band_description(sector_idx + 1, band_desc)
@@ -205,15 +259,14 @@ def process_yearly_emissions(input_path, output_no_path, output_no2_path):
                 
                 # Read SumAllSectors band from input NOx
                 sum_all_nox = src.read(len(processing_sectors) + 1)
-                
+
                 # Split SumAllSectors into NO and NO2 using weighted average fraction
-                sum_all_no = sum_all_nox * (1 - avg_no2_fraction)
-                sum_all_no2 = sum_all_nox * avg_no2_fraction
-                
+                sum_all_no, sum_all_no2 = split(sum_all_nox, avg_no2_fraction)
+
                 # Write SumAllSectors bands (band 13)
                 total_band_idx = len(processing_sectors)
-                no_dst.write(sum_all_no, total_band_idx + 1)
-                no2_dst.write(sum_all_no2, total_band_idx + 1)
+                no_dst.write(sum_all_no.astype(np.float32), total_band_idx + 1)
+                no2_dst.write(sum_all_no2.astype(np.float32), total_band_idx + 1)
                 
                 # Copy description for SumAllSectors band
                 total_band_desc = src.descriptions[total_band_idx]
@@ -225,16 +278,14 @@ def process_yearly_emissions(input_path, output_no_path, output_no2_path):
                 # Print verification sums
                 print("\n=== Verification Sums ===")
                 print("NO sums per sector (kg):")
-                total_no = 0
-                for sector, val in sector_no_sums.items():
-                    mass = val * pixel_area
+                total_no = 0.0
+                for sector, mass in sector_no_sums.items():
                     total_no += mass
                     print(f"{sector}: {mass:.2f}")
-                
+
                 print("\nNO2 sums per sector (kg):")
-                total_no2 = 0
-                for sector, val in sector_no2_sums.items():
-                    mass = val * pixel_area
+                total_no2 = 0.0
+                for sector, mass in sector_no2_sums.items():
                     total_no2 += mass
                     print(f"{sector}: {mass:.2f}")
                 
@@ -242,9 +293,9 @@ def process_yearly_emissions(input_path, output_no_path, output_no2_path):
                 print(f"Total NO2 from sectors: {total_no2:.2f} kg")
                 print(f"Combined total: {total_no + total_no2:.2f} kg")
                 
-                # Calculate and print SumAllSectors band values
-                sum_all_no_mass = np.nansum(sum_all_no) * pixel_area
-                sum_all_no2_mass = np.nansum(sum_all_no2) * pixel_area
+                # Calculate and print SumAllSectors band masses
+                sum_all_no_mass = total_mass(sum_all_no)
+                sum_all_no2_mass = total_mass(sum_all_no2)
                 print(f"\nSumAllSectors NO: {sum_all_no_mass:.2f} kg")
                 print(f"SumAllSectors NO2: {sum_all_no2_mass:.2f} kg")
                 print(f"SumAllSectors combined: {sum_all_no_mass + sum_all_no2_mass:.2f} kg")
@@ -502,7 +553,7 @@ def calculate_mass_balance(job_parameters, data_parameters, sectors, species):
                 sector = sectors[i][0]
                 print(f"{sector}: Input={input_masses[i]:.2f}kg, Output={output_masses[i]:.2f}kg, Ratio={input_masses[i]/output_masses[i]:.4f}")
 
-    # Perform NOx splitting if needed
+    # Perform NOx splitting
     if 'nox' in species:
         print("\n=== Starting NOx Splitting ===")
         nox_path = os.path.join(job_parameters['job_path'], 'emission_nox_yearly.tif')

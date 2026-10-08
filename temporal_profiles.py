@@ -1,4 +1,4 @@
-###simple hno3, rcho, ho2, ro2, oh, h2o added
+
 #mass conservation check
 import numpy as np
 import pandas as pd

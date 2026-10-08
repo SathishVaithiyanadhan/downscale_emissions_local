@@ -13,33 +13,27 @@ data_settings:
 
 # Simulation parameters
 job_settings:
-  job_path: /hpc/gpfs2/home/u/vaithisa/UniA/Downscale_Emissions_simple/Downscale_10m_3days/ 
+  job_path: /hpc/gpfs2/home/u/vaithisa/UniA/Downscale_Emissions_simple/passenger_car_10m/  #Downscaled_Augsburg_Admin_100m/  #Downscaled_Augsburg_city_10m/ 
   job_name: test
-  #min_lon: 607713 #250m biggers augsburg  (607713, 5326684, 671030, 5390979)
-  #max_lon: 671030
-  #min_lat: 5326684 
-  #max_lat: 5390979
-  #min_lon: 638000 #636000 #Augsburg_center_domain
-  #max_lon: 644000 #646000
-  #min_lat: 5356000 #5350000
-  #max_lat: 5362000 #5365000
-  #min_lon: 634000  #Augsburg_full_domain
-  #max_lon: 649000
-  #min_lat: 5345000
-  #max_lat: 5373000
-  #min_lon: 623837  #Augsburg_64m domain
-  #max_lon: 656861
-  #min_lat: 5341737
-  #max_lat: 5374761
-  min_lon: 639322  #Augsburg_8m Bourgesplatz domain   	
-  max_lon: 640366
-  min_lat: 5359358
-  max_lat: 5360402
+  #min_lon: 639322  #Augsburg_8m Bourgesplatz domain   	
+  #max_lon: 640366
+  #min_lat: 5359358
+  #max_lat: 5360402
   #min_lon: 638285  #Augsburg_8m Konigsplatz domain
   #max_lon: 642413
   #min_lat: 5356185
   #max_lat: 5360800
-  resol: 8
+  #Augsburg 100m admin domain
+  #min_lon: 629697.209079
+  #max_lon: 645897.209079
+  #min_lat: 5345759.475841
+  #max_lat: 5369959.475841
+  #Augsburg 10m city center domain
+  min_lon: 637002.000000
+  max_lon: 643602.000000
+  min_lat: 5355334.000000
+  max_lat: 5361934.000000
+  resol: 10
   epsg_code: 25832
   #species: [pm2_5]
   species: [n2o, nmvoc, so2, co, pm10, pm2_5, nh3, pb, cd, hg, as, ni, bc, co2, ch4, nox]
@@ -47,8 +41,8 @@ job_settings:
   inventory: GRETA
   temporal:
     apply_temporal: true
-    start_date: "2024-08-25 00:00:00"
-    end_date: "2024-08-25 23:00:00"
+    start_date: "2024-08-19 00:00:00"  #2024-08-24 22:00:00
+    end_date: "2024-08-19 23:00:00"
     country: "DEU"    # Will automatically include country code 22
     profile_year: 2017
   pm_speciation:
